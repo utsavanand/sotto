@@ -1,4 +1,18 @@
 # Changelog
+## 1.3.4 — 2026-09-01
+
+Security and hardening release.
+
+- Supply chain: dependencies install from requirements.lock — every package
+  pinned to an exact version with a sha256 hash (--require-hashes); the
+  Whisper model is pinned to an immutable Hugging Face revision instead of a
+  mutable repo reference. Requires Python 3.13 (the lock pins 3.13 wheels).
+- log() is best-effort and can no longer throw from inside the exception
+  handlers that keep the workers alive (full disk, broken pipe)
+- Log and history files are created 0600 — transcripts stay private even if
+  parent directory permissions loosen
+- CI actions pinned by commit SHA, ruff pinned to an exact version
+
 ## 1.3.3 — 2026-09-01
 
 - Audio operations are serialized through one dedicated thread: a wedged

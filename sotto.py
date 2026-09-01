@@ -10,6 +10,7 @@ import threading
 import time
 
 import AppKit
+import huggingface_hub
 import mlx_whisper
 import numpy as np
 import Quartz
@@ -27,7 +28,12 @@ V_KEYCODE = 9
 # right-Option release look like a press and left recording stuck on.
 RIGHT_OPTION_MASK = 0x0040
 
-MODEL = "mlx-community/whisper-large-v3-turbo"
+MODEL_REPO = "mlx-community/whisper-large-v3-turbo"
+# Pinned HF revision: the repo name is a mutable reference, the commit is not.
+# Update deliberately (huggingface.co/api/models/<repo> -> "sha") after
+# checking the diff, since the model runs inside an app holding mic and
+# Accessibility permissions.
+MODEL_REVISION = "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
 SAMPLE_RATE = 16_000
 MIN_SECONDS = 0.3
 TAP_MAX_SECONDS = 0.35  # a press shorter than this counts as a tap
@@ -57,19 +63,36 @@ press_time = 0.0
 last_tap = 0.0
 
 
+# Transcripts are sensitive: create log/history files 0600 instead of the
+# umask default, in case the parent directory permissions ever loosen
+def _private_opener(path, flags):
+    return os.open(path, flags, 0o600)
+
+
 def log(msg):
+    # Best-effort by design: log() runs inside the exception handlers that
+    # keep the workers alive, so it must never raise (full disk, broken pipe)
     line = f"{time.strftime('%H:%M:%S')} {msg}"
-    print(line, flush=True)
-    with open(LOG_PATH, "a") as f:
-        f.write(line + "\n")
+    try:
+        print(line, flush=True)
+    except OSError:
+        pass
+    try:
+        with open(LOG_PATH, "a", opener=_private_opener) as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 def append_history(text):
     global history_version
     history.appendleft((time.strftime("%H:%M"), text))
     history_version += 1
-    with open(HISTORY_PATH, "a") as f:
-        f.write(json.dumps({"t": time.time(), "text": text}) + "\n")
+    try:
+        with open(HISTORY_PATH, "a", opener=_private_opener) as f:
+            f.write(json.dumps({"t": time.time(), "text": text}) + "\n")
+    except OSError as e:
+        log(f"could not persist history entry: {e}")
 
 
 def read_history_file():
@@ -265,8 +288,11 @@ def install_hotkey_monitors():
     ]
 
 
+model_path = None  # local snapshot dir of the pinned revision, set by backend
+
+
 def transcribe(audio):
-    return mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL)["text"].strip()
+    return mlx_whisper.transcribe(audio, path_or_hf_repo=model_path)["text"].strip()
 
 
 def set_clipboard(text):
@@ -303,11 +329,13 @@ def backend():
     global state, input_device, input_name
     # Without this boundary a failed download/device/model init leaves the
     # menu bar stuck on "…" forever with no explanation
+    global model_path
     try:
         input_device, input_name = pick_input_device()
         log(f"mic: {input_name}")
-        log(f"loading {MODEL} (first run downloads ~1.6 GB)...")
+        log(f"loading {MODEL_REPO}@{MODEL_REVISION[:8]} (first run downloads ~1.6 GB)...")
         t0 = time.monotonic()
+        model_path = huggingface_hub.snapshot_download(MODEL_REPO, revision=MODEL_REVISION)
         # Warmup on silence: pays model load + Metal kernel compilation now
         # instead of on the first real dictation
         transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32))

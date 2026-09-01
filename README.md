@@ -6,7 +6,7 @@
   <p>
     <img src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white" alt="macOS 14+">
     <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-0071e3" alt="Apple Silicon">
-    <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+    <img src="https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white" alt="Python 3.13">
     <a href="https://github.com/utsavanand/sotto/actions/workflows/ci.yml"><img src="https://github.com/utsavanand/sotto/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="https://github.com/utsavanand/sotto/releases/latest"><img src="https://img.shields.io/github/v/release/utsavanand/sotto" alt="Latest release"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/utsavanand/sotto" alt="License"></a>
@@ -40,7 +40,8 @@ model download.
 
 ## Install
 
-Requires an Apple Silicon Mac and Python 3.10+ (`brew install python`).
+Requires an Apple Silicon Mac and Python 3.13 (`brew install python@3.13` —
+exact version because the lock file pins hash-verified 3.13 wheels).
 
 ```sh
 git clone https://github.com/utsavanand/sotto && cd sotto

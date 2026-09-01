@@ -3,8 +3,8 @@ set -euo pipefail
 
 [[ "$(uname -m)" == "arm64" ]] || { echo "Sotto requires Apple Silicon (transcription runs on MLX)"; exit 1; }
 command -v python3 >/dev/null || { echo "python3 not found — install with: brew install python"; exit 1; }
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
-  || { echo "python3 >= 3.10 required — install with: brew install python"; exit 1; }
+python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else 1)' \
+  || { echo "python 3.13 required (the hashed lock file pins 3.13 wheels) — install with: brew install python@3.13"; exit 1; }
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 SUPPORT="$HOME/Library/Application Support/Sotto"
@@ -14,7 +14,9 @@ STAGE="/Applications/.Sotto.app.new"
 echo "installing python environment into $SUPPORT ..."
 mkdir -p "$SUPPORT"
 [[ -x "$SUPPORT/venv/bin/python" ]] || python3 -m venv "$SUPPORT/venv"
-"$SUPPORT/venv/bin/pip" install --quiet --upgrade --timeout 60 --retries 10 -r "$SRC/requirements.txt"
+# Hash-verified, fully pinned install: a compromised upstream release can't
+# slip into an app that holds mic + Accessibility permissions
+"$SUPPORT/venv/bin/pip" install --quiet --require-hashes --no-deps --timeout 60 --retries 10 -r "$SRC/requirements.lock"
 
 echo "building $APP ..."
 # Stage the new bundle completely before touching the existing app, so a
