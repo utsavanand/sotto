@@ -33,7 +33,7 @@ SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_
 jobs = queue.Queue()
 frames = []
 stream = None
-tap = None
+monitors = []
 state = "loading"  # loading | ready | recording
 input_device = None
 input_name = "system default"
@@ -105,41 +105,29 @@ def stop_recording():
     jobs.put(audio)
 
 
-def tap_callback(_proxy, type_, event, _refcon):
-    if type_ in (Quartz.kCGEventTapDisabledByTimeout, Quartz.kCGEventTapDisabledByUserInput):
-        Quartz.CGEventTapEnable(tap, True)
-        return event
-    if type_ == Quartz.kCGEventFlagsChanged:
-        keycode = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
-        if keycode == HOTKEY_KEYCODE:
-            if Quartz.CGEventGetFlags(event) & Quartz.kCGEventFlagMaskAlternate:
-                start_recording()
-            else:
-                stop_recording()
-    return event
+def handle_flags_changed(event):
+    if event.keyCode() == HOTKEY_KEYCODE:
+        if event.modifierFlags() & AppKit.NSEventModifierFlagOption:
+            start_recording()
+        else:
+            stop_recording()
 
 
-def install_hotkey_tap():
-    global tap
-    tap = Quartz.CGEventTapCreate(
-        Quartz.kCGSessionEventTap,
-        Quartz.kCGHeadInsertEventTap,
-        Quartz.kCGEventTapOptionListenOnly,
-        Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged),
-        tap_callback,
-        None,
-    )
-    if tap is None:
-        log(
-            "WARNING: could not install the hotkey listener — grant Sotto in System "
-            "Settings > Privacy & Security > Input Monitoring, then relaunch."
-        )
-        return False
-    source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
-    Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetMain(), source, Quartz.kCFRunLoopCommonModes)
-    Quartz.CGEventTapEnable(tap, True)
-    Quartz.CFRunLoopWakeUp(Quartz.CFRunLoopGetMain())
-    return True
+# NSEvent monitors instead of a CGEventTap: same job for a single modifier
+# key, but gated on Accessibility only — a tap would additionally require
+# the Input Monitoring permission (this is how Wispr Flow gets away with
+# fewer grants). With Accessibility missing the global monitor silently
+# never fires, hence the startup permission check.
+def install_hotkey_monitors():
+    global monitors
+    monitors = [
+        AppKit.NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+            AppKit.NSEventMaskFlagsChanged, handle_flags_changed
+        ),
+        AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+            AppKit.NSEventMaskFlagsChanged, lambda e: (handle_flags_changed(e), e)[1]
+        ),
+    ]
 
 
 def transcribe(audio):
@@ -158,8 +146,8 @@ def paste(text):
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
 
-# All slow work happens here: the tap callback runs on the main run loop, and
-# blocking it stalls keyboard events system-wide until macOS disables the tap.
+# All slow work happens here: the hotkey handler runs on the main run loop,
+# and blocking it would freeze the menu bar and delay key handling.
 def worker():
     global history_version
     while True:
@@ -182,8 +170,6 @@ def backend():
     # Warmup on silence: pays model load + Metal kernel compilation now instead
     # of on the first real dictation
     transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32))
-    if not install_hotkey_tap():
-        return
     log(f"model ready in {time.monotonic() - t0:.1f}s — hold right Option to dictate")
     state = "ready"
     threading.Thread(target=worker, daemon=True).start()
@@ -207,22 +193,16 @@ def run_alert(title, text, buttons):
 
 def prompt_missing_permissions():
     """Trigger the native macOS permission prompts, then explain the relaunch."""
-    missing = []
-    if not Quartz.CGPreflightListenEventAccess():
-        missing.append("Input Monitoring (to see the hotkey)")
-        Quartz.CGRequestListenEventAccess()
-    if not Quartz.CGPreflightPostEventAccess():
-        missing.append("Accessibility (to paste the text)")
-        Quartz.CGRequestPostEventAccess()
-    if not missing:
+    if Quartz.CGPreflightPostEventAccess():
         return
-    log(f"missing permissions: {', '.join(missing)}")
+    Quartz.CGRequestPostEventAccess()
+    log("missing permission: Accessibility")
     choice = run_alert(
-        "Sotto needs two permissions",
-        "Missing:\n• " + "\n• ".join(missing) + "\n\n"
-        "Enable Sotto in System Settings > Privacy & Security "
-        "(it may be listed as \"Python\"), then quit Sotto from the 🎙 menu "
-        "and open it again — grants only apply on a fresh launch.",
+        "Sotto needs the Accessibility permission",
+        "Accessibility lets Sotto see the hotkey and paste the transcribed "
+        "text.\n\nEnable Sotto in System Settings > Privacy & Security > "
+        "Accessibility (it may be listed as \"Python\"), then quit Sotto from "
+        "the 🎙 menu and open it again — grants only apply on a fresh launch.",
         ["Open System Settings", "Later"],
     )
     if choice == 0:
@@ -316,6 +296,7 @@ def main():
     # bundle identity and takes over the app menu as "Python".
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
     refs = install_status_item()  # noqa: F841 — keep AppKit objects alive
+    install_hotkey_monitors()
     prompt_missing_permissions()
     threading.Thread(target=backend, daemon=True).start()
     AppHelper.runEventLoop()

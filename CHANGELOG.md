@@ -1,4 +1,10 @@
 # Changelog
+## 1.1.1 — 2026-09-01
+
+- Input Monitoring is no longer required: the hotkey is observed with NSEvent
+  global monitors (Accessibility only) instead of a CGEventTap. Sotto now
+  needs the same two grants as Wispr Flow: Microphone and Accessibility.
+
 ## 1.1.0 — 2026-09-01
 
 - Permission popups on launch: missing Input Monitoring / Accessibility now

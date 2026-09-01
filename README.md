@@ -54,7 +54,6 @@ then relaunch the app:
 |---|---|
 | Microphone | recording while the hotkey is held |
 | Accessibility | observing the global hotkey, sending the paste |
-| Input Monitoring | required alongside Accessibility for global keys |
 
 First launch downloads the model (~1.6 GB, cached in `~/.cache/huggingface`;
 watch progress via menu bar → Open Log). After that, startup takes a few
@@ -71,8 +70,8 @@ seconds. To run at login: System Settings → General → Login Items → add So
 
 **The hotkey does nothing.**
 Almost always permissions: check that *Sotto* (not your terminal) is enabled
-under Accessibility *and* Input Monitoring, then relaunch it. Re-running
-`install.sh` rebuilds the bundle and can reset these grants.
+under Accessibility, then relaunch it. Re-running `install.sh` rebuilds the
+bundle and can reset the grant.
 
 **It suddenly stopped working everywhere.**
 Some app is holding macOS *secure input* (password fields, `sudo` prompts,

@@ -165,3 +165,13 @@ status item: state glyph (… / 🎙 / 🔴), Open Log, Quit. A 0.3 s rumps.Time
 polls the state variable because AppKit UI must only be touched from the main
 thread. All logs go to `~/Library/Logs/Sotto.log` as well as stdout, since a
 double-clicked app has no terminal.
+
+### Hotkey via NSEvent monitors (v1.1.1)
+
+The CGEventTap was replaced with NSEvent global+local monitors for
+flagsChanged. Same capability for a single modifier hotkey, but taps are gated
+on the Input Monitoring permission while NSEvent monitors need only
+Accessibility — one less grant for users (and how commercial dictation apps
+avoid the Input Monitoring prompt). Caveat: with Accessibility missing the
+global monitor silently never fires, so the startup preflight check is the
+only signal.
