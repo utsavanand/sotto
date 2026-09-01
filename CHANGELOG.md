@@ -1,4 +1,14 @@
 # Changelog
+## 1.2.0 — 2026-09-01
+
+- On-screen recording indicator: a floating pill at the bottom of the screen
+  with a live mic level animation while the hotkey is held — visible over
+  fullscreen apps, so recording state no longer depends on the menu bar icon
+- History window: transcripts persist to
+  ~/Library/Application Support/Sotto/history.jsonl and 🎙 > History… opens a
+  scrollable window with every transcription; the menu still shows the last
+  10 with click-to-copy, now surviving restarts
+
 ## 1.1.1 — 2026-09-01
 
 - Input Monitoring is no longer required: the hotkey is observed with NSEvent

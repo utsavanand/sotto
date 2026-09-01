@@ -2,6 +2,7 @@
 transcribed text is pasted into the focused app. See DESIGN.md."""
 
 import collections
+import json
 import os
 import queue
 import subprocess
@@ -27,6 +28,8 @@ SAMPLE_RATE = 16_000
 MIN_SECONDS = 0.3
 HISTORY_SIZE = 10
 LOG_PATH = os.path.expanduser("~/Library/Logs/Sotto.log")
+SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
+HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴"}
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -39,6 +42,8 @@ input_device = None
 input_name = "system default"
 history = collections.deque(maxlen=HISTORY_SIZE)  # (time_str, text), newest first
 history_version = 0
+overlay = None
+history_win = None
 
 
 def log(msg):
@@ -46,6 +51,27 @@ def log(msg):
     print(line, flush=True)
     with open(LOG_PATH, "a") as f:
         f.write(line + "\n")
+
+
+def append_history(text):
+    global history_version
+    history.appendleft((time.strftime("%H:%M"), text))
+    history_version += 1
+    with open(HISTORY_PATH, "a") as f:
+        f.write(json.dumps({"t": time.time(), "text": text}) + "\n")
+
+
+def load_history():
+    global history_version
+    try:
+        with open(HISTORY_PATH) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return
+    for line in lines[-HISTORY_SIZE:]:
+        entry = json.loads(line)
+        history.appendleft((time.strftime("%H:%M", time.localtime(entry["t"])), entry["text"]))
+    history_version += 1
 
 
 # Bluetooth mics (AirPods etc.) switch to the low-quality HFP codec when
@@ -76,6 +102,8 @@ def start_recording():
     except sd.PortAudioError as e:
         state = "ready"
         log(f"mic open failed: {e}\n(System Settings > Privacy & Security > Microphone)")
+        return
+    overlay.show()
 
 
 def stop_recording():
@@ -83,6 +111,7 @@ def stop_recording():
     if state != "recording":
         return
     state = "ready"
+    overlay.hide()
     stream.stop()
     stream.close()
     stream = None
@@ -149,15 +178,13 @@ def paste(text):
 # All slow work happens here: the hotkey handler runs on the main run loop,
 # and blocking it would freeze the menu bar and delay key handling.
 def worker():
-    global history_version
     while True:
         audio = jobs.get()
         t0 = time.monotonic()
         text = transcribe(audio)
         if text:
             paste(text)
-            history.appendleft((time.strftime("%H:%M"), text))
-            history_version += 1
+            append_history(text)
         log(f"[{time.monotonic() - t0:.2f}s] {text or '(empty transcription, nothing pasted)'}")
 
 
@@ -192,7 +219,7 @@ def run_alert(title, text, buttons):
 
 
 def prompt_missing_permissions():
-    """Trigger the native macOS permission prompts, then explain the relaunch."""
+    """Trigger the native macOS permission prompt, then explain the relaunch."""
     if Quartz.CGPreflightPostEventAccess():
         return
     Quartz.CGRequestPostEventAccess()
@@ -216,6 +243,128 @@ def status_item_onscreen():
         if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowLayer") == 25:
             return bool(w.get("kCGWindowIsOnscreen", False))
     return None
+
+
+class LevelView(AppKit.NSView):
+    def drawRect_(self, _rect):
+        bounds = self.bounds()
+        pill = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(bounds, 22, 22)
+        AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.08, 0.92).setFill()
+        pill.fill()
+        mid = bounds.size.height / 2
+        dot = AppKit.NSBezierPath.bezierPathWithOvalInRect_(((18, mid - 5), (10, 10)))
+        AppKit.NSColor.systemRedColor().setFill()
+        dot.fill()
+        levels = getattr(self, "levels", [])
+        AppKit.NSColor.whiteColor().setFill()
+        for i in range(14):
+            lvl = levels[i] if i < len(levels) else 0.0
+            h = 4 + lvl * 26
+            bar = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                ((44 + i * 11, mid - h / 2), (7, h)), 2, 2
+            )
+            bar.fill()
+
+
+class Overlay(AppKit.NSObject):
+    """Floating bottom-center pill with a live mic level animation."""
+
+    def build(self):
+        size = (210, 44)
+        panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+            ((0, 0), size),
+            AppKit.NSWindowStyleMaskBorderless | AppKit.NSWindowStyleMaskNonactivatingPanel,
+            AppKit.NSBackingStoreBuffered,
+            False,
+        )
+        panel.setOpaque_(False)
+        panel.setBackgroundColor_(AppKit.NSColor.clearColor())
+        panel.setLevel_(AppKit.NSScreenSaverWindowLevel)
+        panel.setIgnoresMouseEvents_(True)
+        panel.setCollectionBehavior_(
+            AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
+            | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
+        )
+        view = LevelView.alloc().initWithFrame_(((0, 0), size))
+        panel.setContentView_(view)
+        self.panel, self.view, self.timer = panel, view, None
+
+    def show(self):
+        screen = AppKit.NSScreen.mainScreen().frame()
+        w, h = 210, 44
+        x = screen.origin.x + (screen.size.width - w) / 2
+        self.panel.setFrame_display_(((x, screen.origin.y + 110), (w, h)), True)
+        self.view.levels = []
+        self.panel.orderFrontRegardless()
+        self.timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            0.07, self, "tick:", None, True
+        )
+
+    def hide(self):
+        if self.timer:
+            self.timer.invalidate()
+            self.timer = None
+        self.panel.orderOut_(None)
+
+    def tick_(self, _timer):
+        level = 0.0
+        if frames:
+            chunk = frames[-1]
+            level = min(1.0, float(np.sqrt((chunk**2).mean())) * 18)
+        self.view.levels = (getattr(self.view, "levels", []) + [level])[-14:]
+        self.view.setNeedsDisplay_(True)
+
+
+class HistoryWindow(AppKit.NSObject):
+    """Scrollable read-only window with every transcription ever made."""
+
+    def show(self):
+        if not getattr(self, "window", None):
+            self.buildWindow()
+        self.text_view.setString_(self.renderText())
+        AppKit.NSApp.activateIgnoringOtherApps_(True)
+        self.window.makeKeyAndOrderFront_(None)
+
+    def buildWindow(self):
+        mask = (
+            AppKit.NSWindowStyleMaskTitled
+            | AppKit.NSWindowStyleMaskClosable
+            | AppKit.NSWindowStyleMaskResizable
+            | AppKit.NSWindowStyleMaskMiniaturizable
+        )
+        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            ((0, 0), (480, 560)), mask, AppKit.NSBackingStoreBuffered, False
+        )
+        window.setTitle_("Sotto History")
+        window.setReleasedWhenClosed_(False)
+        window.center()
+        scroll = AppKit.NSScrollView.alloc().initWithFrame_(window.contentView().bounds())
+        scroll.setHasVerticalScroller_(True)
+        scroll.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
+        tv = AppKit.NSTextView.alloc().initWithFrame_(scroll.bounds())
+        tv.setEditable_(False)
+        tv.setFont_(AppKit.NSFont.systemFontOfSize_(13))
+        tv.setTextContainerInset_((14, 14))
+        tv.setAutoresizingMask_(AppKit.NSViewWidthSizable)
+        tv.setVerticallyResizable_(True)
+        tv.textContainer().setWidthTracksTextView_(True)
+        scroll.setDocumentView_(tv)
+        window.setContentView_(scroll)
+        self.window, self.text_view = window, tv
+
+    def renderText(self):
+        try:
+            with open(HISTORY_PATH) as f:
+                entries = [json.loads(line) for line in f]
+        except FileNotFoundError:
+            entries = []
+        if not entries:
+            return "No transcriptions yet.\n\nHold right Option, speak, release."
+        blocks = []
+        for e in reversed(entries):
+            stamp = time.strftime("%b %d, %H:%M", time.localtime(e["t"]))
+            blocks.append(f"{stamp}\n{e['text']}")
+        return "\n\n".join(blocks)
 
 
 class StatusItem(AppKit.NSObject):
@@ -258,7 +407,12 @@ class StatusItem(AppKit.NSObject):
             placeholder.setEnabled_(False)
             menu.addItem_(placeholder)
         menu.addItem_(AppKit.NSMenuItem.separatorItem())
-        for title, action, key in (("Open Log", "openLog:", ""), ("Quit Sotto", "quit:", "q")):
+        actions = (
+            ("History…", "showHistory:", "h"),
+            ("Open Log", "openLog:", ""),
+            ("Quit Sotto", "quit:", "q"),
+        )
+        for title, action, key in actions:
             entry = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, key)
             entry.setTarget_(self)
             menu.addItem_(entry)
@@ -266,6 +420,9 @@ class StatusItem(AppKit.NSObject):
 
     def copyTranscript_(self, sender):
         set_clipboard(sender.representedObject())
+
+    def showHistory_(self, _sender):
+        history_win.show()
 
     def openLog_(self, _sender):
         subprocess.run(["open", LOG_PATH], check=False)
@@ -291,11 +448,17 @@ def install_status_item():
 
 
 def main():
+    global overlay, history_win
+    os.makedirs(SUPPORT_DIR, exist_ok=True)
     app = AppKit.NSApplication.sharedApplication()
     # Accessory: menu-bar only. Without this the process inherits Python.app's
     # bundle identity and takes over the app menu as "Python".
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+    load_history()
     refs = install_status_item()  # noqa: F841 — keep AppKit objects alive
+    overlay = Overlay.alloc().init()
+    overlay.build()
+    history_win = HistoryWindow.alloc().init()
     install_hotkey_monitors()
     prompt_missing_permissions()
     threading.Thread(target=backend, daemon=True).start()

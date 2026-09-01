@@ -28,6 +28,10 @@ model download.
 - **Fast** — under 1.5 s from key-release to text on an M-series GPU
   (0.5 s typical on an M4 Max), with large-model accuracy
 - **Menu bar status** — `…` loading · `🎙` ready · `🔴` recording
+- **Recording indicator** — floating pill with a live mic level animation
+  while the hotkey is held
+- **History** — every transcript saved locally; browse in 🎙 → History…,
+  or click a recent one in the menu to copy it
 - **Self-diagnosing** — every dictation logs its mic, duration, signal level,
   latency, and transcript to `~/Library/Logs/Sotto.log`
 - **Small** — one Python file, four dependencies, no config files
@@ -103,7 +107,9 @@ accuracy for speed and memory.
 
 Audio is captured only while the hotkey is held, processed in memory, and
 never written to disk or sent anywhere. The transcript goes to the clipboard
-and the local log file — delete `~/Library/Logs/Sotto.log` any time. The model
+, the local log file, and the local history file
+(`~/Library/Application Support/Sotto/history.jsonl`) — delete either any
+time. The model
 is fetched once from Hugging Face; nothing else touches the network.
 
 ## Development
