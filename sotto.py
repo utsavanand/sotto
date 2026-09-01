@@ -1,17 +1,19 @@
 """Sotto: hold right Option anywhere, speak, release — locally
 transcribed text is pasted into the focused app. See DESIGN.md."""
 
+import ctypes
 import os
 import queue
 import subprocess
 import threading
 import time
 
+import AppKit
 import mlx_whisper
 import numpy as np
 import Quartz
-import rumps
 import sounddevice as sd
+from PyObjCTools import AppHelper
 
 # kVK_RightOption / kVK_ANSI_V from Carbon's Events.h. Raw keycodes, not
 # characters: pynput was dropped because its character mapping calls TIS
@@ -163,6 +165,17 @@ def worker():
 
 def backend():
     global state, input_device, input_name
+    appsvc = ctypes.cdll.LoadLibrary(
+        "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+    )
+    if not appsvc.AXIsProcessTrusted():
+        # The listen-only tap works on Input Monitoring alone, so dictation can
+        # look fine while every synthetic Cmd+V is silently dropped
+        log(
+            "WARNING: Accessibility not granted — transcription will work but the "
+            "paste will be silently dropped. Enable Sotto (or Python) in System "
+            "Settings > Privacy & Security > Accessibility, then relaunch."
+        )
     input_device, input_name = pick_input_device()
     log(f"mic: {input_name}")
     log(f"loading {MODEL} (first run downloads ~1.6 GB)...")
@@ -177,23 +190,47 @@ def backend():
     threading.Thread(target=worker, daemon=True).start()
 
 
-class SottoApp(rumps.App):
-    def __init__(self):
-        super().__init__("Sotto", title=TITLES[state], quit_button="Quit Sotto")
-        self.menu = [
-            rumps.MenuItem("Open Log", callback=lambda _: subprocess.run(["open", LOG_PATH], check=False))
-        ]
-        # Poll state instead of pushing: AppKit UI must only be touched from the main thread
-        rumps.Timer(self._refresh, 0.3).start()
+class StatusItem(AppKit.NSObject):
+    def refresh_(self, _timer):
+        button = self.item.button()
+        if button.title() != TITLES[state]:
+            button.setTitle_(TITLES[state])
 
-    def _refresh(self, _):
-        if self.title != TITLES[state]:
-            self.title = TITLES[state]
+    def openLog_(self, _sender):
+        subprocess.run(["open", LOG_PATH], check=False)
+
+    def quit_(self, _sender):
+        AppKit.NSApp.terminate_(None)
+
+
+def install_status_item():
+    delegate = StatusItem.alloc().init()
+    item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
+        AppKit.NSVariableStatusItemLength
+    )
+    item.button().setTitle_(TITLES[state])
+    menu = AppKit.NSMenu.alloc().init()
+    for title, action, key in (("Open Log", "openLog:", ""), ("Quit Sotto", "quit:", "q")):
+        entry = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, key)
+        entry.setTarget_(delegate)
+        menu.addItem_(entry)
+    item.setMenu_(menu)
+    delegate.item = item
+    timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        0.3, delegate, "refresh:", None, True
+    )
+    log(f"status item installed (visible: {not item.button().isHidden()})")
+    return delegate, item, timer
 
 
 def main():
+    app = AppKit.NSApplication.sharedApplication()
+    # Accessory: menu-bar only. Without this the process inherits Python.app's
+    # bundle identity and takes over the app menu as "Python".
+    app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+    refs = install_status_item()  # noqa: F841 — keep AppKit objects alive
     threading.Thread(target=backend, daemon=True).start()
-    SottoApp().run()
+    AppHelper.runEventLoop()
 
 
 if __name__ == "__main__":
