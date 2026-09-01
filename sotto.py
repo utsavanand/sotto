@@ -40,6 +40,8 @@ TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠�
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
 jobs = queue.Queue()
+audio_ops = queue.Queue()  # serialized PortAudio operations, see audio_control()
+audio_op_started = None  # monotonic start of the op in flight, None when idle
 record_buf = None  # per-recording frame list; identity marks the active recording
 stream = None
 monitors = []
@@ -107,17 +109,42 @@ def pick_input_device():
 
 # CoreAudio open/stop can block indefinitely on a HAL mutex held by another
 # audio client (observed as a full main-thread deadlock with Wispr Flow
-# running), so every PortAudio call lives on a throwaway background thread —
-# the hotkey and UI stay alive no matter what the audio stack does.
+# running), so every PortAudio call runs on one dedicated audio thread — the
+# hotkey and UI stay alive no matter what the audio stack does, and
+# serializing the ops means a wedged device pins at most that one thread
+# instead of leaking a new one per recording.
+def audio_control():
+    global audio_op_started
+    while True:
+        op = audio_ops.get()
+        audio_op_started = time.monotonic()
+        try:
+            op()
+        except Exception as e:  # noqa: BLE001
+            log(f"audio operation failed: {e!r}")
+        audio_op_started = None
+
+
+def audio_wedged():
+    started = audio_op_started
+    return started is not None and time.monotonic() - started > 5
+
+
 def start_recording():
     global state, record_buf
     if state != "ready":
+        return
+    if audio_wedged():
+        log(
+            "audio device is not responding — recording skipped. Quit other "
+            "audio apps (e.g. another dictation tool) or relaunch Sotto."
+        )
         return
     state = "recording"
     buf = []
     record_buf = buf
     overlay.show()
-    threading.Thread(target=_open_stream, args=(buf,), daemon=True).start()
+    audio_ops.put(lambda: _open_stream(buf))
 
 
 def _open_stream(buf):
@@ -142,8 +169,21 @@ def _open_stream(buf):
         stream = s
     else:
         # Released before the stream finished opening — discard
+        _shutdown_stream(s)
+
+
+def _shutdown_stream(s):
+    # close() must run even when stop() raises, or the abandoned stream can
+    # keep the microphone device busy and wedge every later open
+    try:
         s.stop()
-        s.close()
+    except sd.PortAudioError as e:
+        log(f"mic stop failed: {e}")
+    finally:
+        try:
+            s.close()
+        except sd.PortAudioError:
+            pass
 
 
 def stop_recording():
@@ -155,17 +195,13 @@ def stop_recording():
     s, buf = stream, record_buf
     stream = None
     record_buf = None
-    threading.Thread(target=_finish_recording, args=(s, buf), daemon=True).start()
+    audio_ops.put(lambda: _finish_recording(s, buf))
 
 
 def _finish_recording(s, buf):
     if s is not None:
         t0 = time.monotonic()
-        try:
-            s.stop()
-            s.close()
-        except sd.PortAudioError as e:
-            log(f"mic stop failed: {e}")
+        _shutdown_stream(s)
         if time.monotonic() - t0 > 3:
             log("audio device was slow to release — another audio app may be fighting for the mic")
     if not buf:
@@ -597,6 +633,7 @@ def main():
     overlay = Overlay.alloc().init()
     overlay.build()
     history_win = HistoryWindow.alloc().init()
+    threading.Thread(target=audio_control, daemon=True).start()
     install_hotkey_monitors()
     prompt_missing_permissions()
     threading.Thread(target=backend, daemon=True).start()

@@ -1,4 +1,13 @@
 # Changelog
+## 1.3.3 — 2026-09-01
+
+- Audio operations are serialized through one dedicated thread: a wedged
+  CoreAudio device now pins at most one thread instead of leaking one per
+  recording, and new recordings are refused with a clear log line while the
+  device is unresponsive (>5 s)
+- A failed stream stop() no longer skips close(), which could keep the
+  microphone busy and break every later recording
+
 ## 1.3.2 — 2026-09-01
 
 Reliability release: fixes a main-thread deadlock and addresses a code review.
