@@ -1,10 +1,10 @@
 #!/bin/zsh
 set -euo pipefail
 
-[[ "$(uname -m)" == "arm64" ]] || { echo "Sotto requires Apple Silicon (transcription runs on MLX)"; exit 1 }
-command -v python3 >/dev/null || { echo "python3 not found — install with: brew install python"; exit 1 }
+[[ "$(uname -m)" == "arm64" ]] || { echo "Sotto requires Apple Silicon (transcription runs on MLX)"; exit 1; }
+command -v python3 >/dev/null || { echo "python3 not found — install with: brew install python"; exit 1; }
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
-  || { echo "python3 >= 3.10 required — install with: brew install python"; exit 1 }
+  || { echo "python3 >= 3.10 required — install with: brew install python"; exit 1; }
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 SUPPORT="$HOME/Library/Application Support/Sotto"

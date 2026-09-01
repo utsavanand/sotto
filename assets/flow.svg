@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 190" font-family="-apple-system, 'Segoe UI', Roboto, sans-serif">
+  <!-- step 1: hold the key -->
+  <g>
+    <rect x="10" y="30" width="230" height="120" rx="14" fill="#f6f8fa" stroke="#d0d7de"/>
+    <rect x="85" y="52" width="80" height="52" rx="10" fill="#ffffff" stroke="#8b949e" stroke-width="1.5"/>
+    <rect x="85" y="58" width="80" height="52" rx="10" fill="#ffffff" stroke="#57606a" stroke-width="1.5"/>
+    <text x="125" y="92" font-size="26" text-anchor="middle" fill="#24292f">⌥</text>
+    <text x="125" y="134" font-size="15" text-anchor="middle" fill="#57606a">hold right Option</text>
+  </g>
+  <text x="262" y="97" font-size="24" fill="#8b949e">→</text>
+
+  <!-- step 2: speak -->
+  <g>
+    <rect x="295" y="30" width="230" height="120" rx="14" fill="#f6f8fa" stroke="#d0d7de"/>
+    <circle cx="410" cy="76" r="19" fill="#cf222e"/>
+    <rect x="403" y="64" width="14" height="18" rx="7" fill="#ffffff"/>
+    <path d="M399 74 a11 11 0 0 0 22 0" stroke="#ffffff" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <text x="410" y="134" font-size="15" text-anchor="middle" fill="#57606a">speak, then release</text>
+  </g>
+  <text x="547" y="97" font-size="24" fill="#8b949e">→</text>
+
+  <!-- step 3: text lands in the focused app -->
+  <g>
+    <rect x="580" y="30" width="310" height="120" rx="14" fill="#f6f8fa" stroke="#d0d7de"/>
+    <rect x="600" y="56" width="270" height="44" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+    <text x="612" y="83" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#24292f">Ship the fix by Friday.<tspan fill="#7aa2f7">▏</tspan></text>
+    <text x="735" y="134" font-size="15" text-anchor="middle" fill="#57606a">pasted at your cursor, transcribed on-device</text>
+  </g>
+</svg>

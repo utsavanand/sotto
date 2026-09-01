@@ -75,7 +75,7 @@ def on_press(key):
             callback=lambda data, *_: frames.append(data.copy()),
         )
         stream.start()
-    except Exception as e:
+    except sd.PortAudioError as e:
         state = "ready"
         log(f"mic open failed: {e}\n(System Settings > Privacy & Security > Microphone)")
 
@@ -151,7 +151,9 @@ def backend():
 class SottoApp(rumps.App):
     def __init__(self):
         super().__init__("Sotto", title=TITLES[state], quit_button="Quit Sotto")
-        self.menu = [rumps.MenuItem("Open Log", callback=lambda _: subprocess.run(["open", LOG_PATH]))]
+        self.menu = [
+            rumps.MenuItem("Open Log", callback=lambda _: subprocess.run(["open", LOG_PATH], check=False))
+        ]
         # Poll state instead of pushing: AppKit UI must only be touched from the main thread
         rumps.Timer(self._refresh, 0.3).start()
 
