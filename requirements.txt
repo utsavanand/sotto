@@ -1,0 +1,4 @@
+mlx-whisper
+sounddevice
+pynput
+rumps
