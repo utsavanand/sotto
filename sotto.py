@@ -1,7 +1,6 @@
 """Sotto: hold right Option anywhere, speak, release — locally
 transcribed text is pasted into the focused app. See DESIGN.md."""
 
-import ctypes
 import os
 import queue
 import subprocess
@@ -10,22 +9,27 @@ import time
 
 import mlx_whisper
 import numpy as np
+import Quartz
 import rumps
 import sounddevice as sd
-from pynput.keyboard import Controller, Key, Listener
 
-HOTKEY = Key.alt_r
+# kVK_RightOption / kVK_ANSI_V from Carbon's Events.h. Raw keycodes, not
+# characters: pynput was dropped because its character mapping calls TIS
+# (Text Input Source) APIs off the main thread, which macOS 15 kills with
+# EXC_BREAKPOINT (dispatch_assert_queue).
+HOTKEY_KEYCODE = 61
+V_KEYCODE = 9
+
 MODEL = "mlx-community/whisper-large-v3-turbo"
 SAMPLE_RATE = 16_000
 MIN_SECONDS = 0.3
 LOG_PATH = os.path.expanduser("~/Library/Logs/Sotto.log")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴"}
 
-keyboard = Controller()
 jobs = queue.Queue()
 frames = []
 stream = None
-listener = None
+tap = None
 state = "loading"  # loading | ready | recording
 input_device = None
 input_name = "system default"
@@ -38,18 +42,6 @@ def log(msg):
         f.write(line + "\n")
 
 
-def check_accessibility():
-    appsvc = ctypes.cdll.LoadLibrary(
-        "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
-    )
-    if not appsvc.AXIsProcessTrusted():
-        log(
-            "WARNING: not trusted for Accessibility — the hotkey will not be seen and "
-            "paste will not work. Grant Sotto (or the terminal running it) in System "
-            "Settings > Privacy & Security > Accessibility and Input Monitoring, then relaunch."
-        )
-
-
 # Bluetooth mics (AirPods etc.) switch to the low-quality HFP codec when
 # recording starts, losing ~1s of audio during the switch — so prefer the
 # built-in mic over the system default.
@@ -60,9 +52,9 @@ def pick_input_device():
     return None, sd.query_devices(kind="input")["name"] + " (system default)"
 
 
-def on_press(key):
+def start_recording():
     global stream, state
-    if key != HOTKEY or state != "ready":
+    if state != "ready":
         return
     state = "recording"
     frames.clear()
@@ -80,9 +72,9 @@ def on_press(key):
         log(f"mic open failed: {e}\n(System Settings > Privacy & Security > Microphone)")
 
 
-def on_release(key):
+def stop_recording():
     global stream, state
-    if key != HOTKEY or state != "recording":
+    if state != "recording":
         return
     state = "ready"
     stream.stop()
@@ -107,20 +99,58 @@ def on_release(key):
     jobs.put(audio)
 
 
+def tap_callback(_proxy, type_, event, _refcon):
+    if type_ in (Quartz.kCGEventTapDisabledByTimeout, Quartz.kCGEventTapDisabledByUserInput):
+        Quartz.CGEventTapEnable(tap, True)
+        return event
+    if type_ == Quartz.kCGEventFlagsChanged:
+        keycode = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
+        if keycode == HOTKEY_KEYCODE:
+            if Quartz.CGEventGetFlags(event) & Quartz.kCGEventFlagMaskAlternate:
+                start_recording()
+            else:
+                stop_recording()
+    return event
+
+
+def install_hotkey_tap():
+    global tap
+    tap = Quartz.CGEventTapCreate(
+        Quartz.kCGSessionEventTap,
+        Quartz.kCGHeadInsertEventTap,
+        Quartz.kCGEventTapOptionListenOnly,
+        Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged),
+        tap_callback,
+        None,
+    )
+    if tap is None:
+        log(
+            "WARNING: could not install the hotkey listener — grant Sotto in System "
+            "Settings > Privacy & Security > Accessibility and Input Monitoring, "
+            "then relaunch."
+        )
+        return False
+    source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
+    Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetMain(), source, Quartz.kCFRunLoopCommonModes)
+    Quartz.CGEventTapEnable(tap, True)
+    Quartz.CFRunLoopWakeUp(Quartz.CFRunLoopGetMain())
+    return True
+
+
 def transcribe(audio):
     return mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL)["text"].strip()
 
 
 def paste(text):
     subprocess.run("pbcopy", input=text.encode(), check=True)
-    with keyboard.pressed(Key.cmd):
-        keyboard.press("v")
-        keyboard.release("v")
+    for key_down in (True, False):
+        event = Quartz.CGEventCreateKeyboardEvent(None, V_KEYCODE, key_down)
+        Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
 
-# All slow work happens here, off the pynput listener callback — blocking that
-# callback stalls the macOS event tap (keystrokes lag system-wide) and macOS
-# eventually kills the tap, silently disabling the hotkey.
+# All slow work happens here: the tap callback runs on the main run loop, and
+# blocking it stalls keyboard events system-wide until macOS disables the tap.
 def worker():
     while True:
         audio = jobs.get()
@@ -132,8 +162,7 @@ def worker():
 
 
 def backend():
-    global state, input_device, input_name, listener
-    check_accessibility()
+    global state, input_device, input_name
     input_device, input_name = pick_input_device()
     log(f"mic: {input_name}")
     log(f"loading {MODEL} (first run downloads ~1.6 GB)...")
@@ -141,11 +170,11 @@ def backend():
     # Warmup on silence: pays model load + Metal kernel compilation now instead
     # of on the first real dictation
     transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32))
+    if not install_hotkey_tap():
+        return
     log(f"model ready in {time.monotonic() - t0:.1f}s — hold right Option to dictate")
     state = "ready"
     threading.Thread(target=worker, daemon=True).start()
-    listener = Listener(on_press=on_press, on_release=on_release)
-    listener.start()
 
 
 class SottoApp(rumps.App):

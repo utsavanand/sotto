@@ -15,3 +15,12 @@ Initial release.
   recording starts, which garbled transcripts
 - Per-dictation log line with mic, duration, peak level, latency, and
   transcript in `~/Library/Logs/Sotto.log`
+
+## 1.0.1 — 2026-09-01
+
+- Fix crash on macOS Sequoia: replaced pynput with a Quartz CGEventTap on the
+  main run loop and CGEventPost for the paste. pynput's key handling calls
+  Text Input Source APIs from a background thread, which macOS 15 terminates
+  with EXC_BREAKPOINT (dispatch_assert_queue) on the first key event.
+- One dependency fewer; failed tap creation now logs a permissions pointer
+  at startup instead of silently seeing no keys.
