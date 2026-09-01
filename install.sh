@@ -19,6 +19,7 @@ echo "building $APP ..."
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$SRC/sotto.py" "$APP/Contents/Resources/"
+cp "$SRC/assets/Sotto.icns" "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -29,6 +30,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Sotto</string>
   <key>CFBundleIdentifier</key><string>com.utsavanand.sotto</string>
   <key>CFBundleExecutable</key><string>sotto</string>
+  <key>CFBundleIconFile</key><string>Sotto</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0.0</string>
   <key>LSUIElement</key><true/>
