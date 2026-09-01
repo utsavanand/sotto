@@ -1,4 +1,13 @@
 # Changelog
+## 1.3.1 — 2026-09-01
+
+- Recording pill redesign: frosted-glass HUD background, finer 24-bar
+  waveform, pulsing record dot
+- Real noise gate: the waveform is a flat dotted line until the mic level
+  clears an absolute margin above the rolling noise floor — ambient noise no
+  longer animates the bars (min/max normalization was amplifying
+  silence-level jitter)
+
 ## 1.3.0 — 2026-09-01
 
 - Hands-free mode: double-tap right Option to lock recording on, tap once to

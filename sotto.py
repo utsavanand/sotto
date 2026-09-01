@@ -267,27 +267,26 @@ def status_item_onscreen():
     return None
 
 
-OVERLAY_SIZE = (170, 34)
-BAR_COUNT = 10
+OVERLAY_SIZE = (176, 36)
+BAR_COUNT = 24
 
 
 class LevelView(AppKit.NSView):
     def drawRect_(self, _rect):
         bounds = self.bounds()
-        pill = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(bounds, 17, 17)
-        AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.1, 0.85).setFill()
-        pill.fill()
         mid = bounds.size.height / 2
-        dot = AppKit.NSBezierPath.bezierPathWithOvalInRect_(((16, mid - 4), (8, 8)))
-        AppKit.NSColor.systemRedColor().setFill()
-        dot.fill()
+        # Record dot, gently pulsing
+        pulse = 0.55 + 0.45 * abs(np.sin(getattr(self, "ticks", 0) * 0.18))
+        AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.27, 0.23, pulse).setFill()
+        AppKit.NSBezierPath.bezierPathWithOvalInRect_(((14, mid - 4), (8, 8))).fill()
+        # Waveform: flat dotted line at rest, bars rise only on speech
         levels = getattr(self, "levels", [])
-        AppKit.NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.8).setFill()
+        AppKit.NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.9).setFill()
         for i in range(BAR_COUNT):
             lvl = levels[i] if i < len(levels) else 0.0
-            h = 3 + lvl * 16
+            h = 2.5 + lvl * 20
             bar = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                ((38 + i * 12, mid - h / 2), (6, h)), 2, 2
+                ((32 + i * 5.5, mid - h / 2), (3, h)), 1.5, 1.5
             )
             bar.fill()
 
@@ -311,8 +310,17 @@ class Overlay(AppKit.NSObject):
             AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
             | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
         )
+        # Frosted-glass HUD background instead of a flat fill
+        effect = AppKit.NSVisualEffectView.alloc().initWithFrame_(((0, 0), size))
+        effect.setMaterial_(AppKit.NSVisualEffectMaterialHUDWindow)
+        effect.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
+        effect.setState_(AppKit.NSVisualEffectStateActive)
+        effect.setWantsLayer_(True)
+        effect.layer().setCornerRadius_(size[1] / 2)
+        effect.layer().setMasksToBounds_(True)
+        panel.setContentView_(effect)
         view = LevelView.alloc().initWithFrame_(((0, 0), size))
-        panel.setContentView_(view)
+        effect.addSubview_(view)
         self.panel, self.view, self.timer = panel, view, None
 
     def show(self):
@@ -339,18 +347,26 @@ class Overlay(AppKit.NSObject):
         if frames:
             chunk = frames[-1]
             rms = float(np.sqrt((chunk**2).mean()))
-        # Adaptive: normalize against the rolling noise floor and recent peak,
-        # so ambient room noise sits flat and only speech moves the bars
         self.rms_history.append(rms)
-        floor = min(self.rms_history)
-        ceiling = max(max(self.rms_history), floor + 0.01)
-        target = (rms - floor) / (ceiling - floor)
-        target = 0.0 if target < 0.15 else min(1.0, target)
+        # Noise gate with an absolute margin: the floor is the quietest recent
+        # level, and nothing moves until rms clears floor*2 + 0.004. Ambient
+        # room noise therefore draws a flat dotted line; only speech animates.
+        # (Pure min/max normalization amplified silence-level jitter.)
+        floor = sorted(self.rms_history)[max(0, len(self.rms_history) // 5)]
+        gate = floor * 2.0 + 0.004
+        if rms <= gate:
+            target = 0.0
+        else:
+            ceiling = max(max(self.rms_history), gate + 0.03)
+            target = min(1.0, (rms - gate) / (ceiling - gate))
         # Fast attack, slow decay reads as speech rather than jitter
         if target > self.displayed:
             self.displayed = 0.5 * self.displayed + 0.5 * target
         else:
             self.displayed = 0.75 * self.displayed + 0.25 * target
+        if self.displayed < 0.04:
+            self.displayed = 0.0
+        self.view.ticks = getattr(self.view, "ticks", 0) + 1
         self.view.levels = (getattr(self.view, "levels", []) + [self.displayed])[-BAR_COUNT:]
         self.view.setNeedsDisplay_(True)
 
