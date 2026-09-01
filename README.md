@@ -47,7 +47,7 @@ open /Applications/Sotto.app
 `/Applications`. Locally built means no Gatekeeper warnings and nothing to
 notarize.
 
-Then grant **Sotto** in System Settings → Privacy & Security — all three,
+Then grant **Sotto** in System Settings → Privacy & Security — both,
 then relaunch the app:
 
 | Permission | Why |
@@ -128,10 +128,9 @@ The cached model lives in `~/.cache/huggingface` if you want that gone too.
 ## Acknowledgments
 
 Built on [mlx-whisper](https://github.com/ml-explore/mlx-examples),
-[sounddevice](https://github.com/spatialaudio/python-sounddevice),
-[pynput](https://github.com/moses-palmer/pynput), and
-[rumps](https://github.com/jaredks/rumps). Interaction model inspired by
-[Wispr Flow](https://wisprflow.ai).
+[sounddevice](https://github.com/spatialaudio/python-sounddevice), and
+[PyObjC](https://github.com/ronaldoussoren/pyobjc). Interaction model
+inspired by [Wispr Flow](https://wisprflow.ai).
 
 ## License
 
