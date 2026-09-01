@@ -9,6 +9,7 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
 SRC="$(cd "$(dirname "$0")" && pwd)"
 SUPPORT="$HOME/Library/Application Support/Sotto"
 APP="/Applications/Sotto.app"
+STAGE="/Applications/.Sotto.app.new"
 
 echo "installing python environment into $SUPPORT ..."
 mkdir -p "$SUPPORT"
@@ -16,12 +17,14 @@ mkdir -p "$SUPPORT"
 "$SUPPORT/venv/bin/pip" install --quiet --upgrade --timeout 60 --retries 10 -r "$SRC/requirements.txt"
 
 echo "building $APP ..."
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$SRC/sotto.py" "$APP/Contents/Resources/"
-cp "$SRC/assets/Sotto.icns" "$APP/Contents/Resources/"
+# Stage the new bundle completely before touching the existing app, so a
+# failed build never destroys a working installation
+rm -rf "$STAGE"
+mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
+cp "$SRC/sotto.py" "$STAGE/Contents/Resources/"
+cp "$SRC/assets/Sotto.icns" "$STAGE/Contents/Resources/"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$STAGE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -40,15 +43,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-cat > "$APP/Contents/MacOS/sotto" <<LAUNCH
+cat > "$STAGE/Contents/MacOS/sotto" <<LAUNCH
 #!/bin/zsh
 exec "$SUPPORT/venv/bin/python" "\$(cd "\$(dirname "\$0")/../Resources" && pwd)/sotto.py"
 LAUNCH
-chmod +x "$APP/Contents/MacOS/sotto"
+chmod +x "$STAGE/Contents/MacOS/sotto"
 
 # Ad-hoc signature: local install needs no notarization, and a signature gives
 # the bundle a stabler TCC identity than none at all
-codesign --force -s - "$APP"
+codesign --force -s - "$STAGE"
+rm -rf "$APP"
+mv "$STAGE" "$APP"
 
 echo ""
 echo "done. launch with:  open /Applications/Sotto.app"

@@ -22,6 +22,10 @@ from PyObjCTools import AppHelper
 # EXC_BREAKPOINT (dispatch_assert_queue).
 HOTKEY_KEYCODE = 61
 V_KEYCODE = 9
+# NX_DEVICERALTKEYMASK: right-Option's device-specific bit. The aggregate
+# NSEventModifierFlagOption stays set while LEFT Option is held, which made a
+# right-Option release look like a press and left recording stuck on.
+RIGHT_OPTION_MASK = 0x0040
 
 MODEL = "mlx-community/whisper-large-v3-turbo"
 SAMPLE_RATE = 16_000
@@ -32,11 +36,11 @@ HISTORY_SIZE = 10
 LOG_PATH = os.path.expanduser("~/Library/Logs/Sotto.log")
 SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
-TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴"}
+TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
 jobs = queue.Queue()
-frames = []
+record_buf = None  # per-recording frame list; identity marks the active recording
 stream = None
 monitors = []
 state = "loading"  # loading | ready | recording
@@ -66,16 +70,28 @@ def append_history(text):
         f.write(json.dumps({"t": time.time(), "text": text}) + "\n")
 
 
-def load_history():
-    global history_version
+def read_history_file():
+    """Returns [(epoch, text)], oldest first, skipping damaged lines — a
+    truncated final write must never take the whole app down."""
     try:
         with open(HISTORY_PATH) as f:
             lines = f.readlines()
-    except FileNotFoundError:
-        return
-    for line in lines[-HISTORY_SIZE:]:
-        entry = json.loads(line)
-        history.appendleft((time.strftime("%H:%M", time.localtime(entry["t"])), entry["text"]))
+    except OSError:
+        return []
+    entries = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+            entries.append((float(e["t"]), str(e["text"])))
+        except (ValueError, KeyError, TypeError):
+            log("skipping a malformed history line")
+    return entries
+
+
+def load_history():
+    global history_version
+    for epoch, text in read_history_file()[-HISTORY_SIZE:]:
+        history.appendleft((time.strftime("%H:%M", time.localtime(epoch)), text))
     history_version += 1
 
 
@@ -89,41 +105,73 @@ def pick_input_device():
     return None, sd.query_devices(kind="input")["name"] + " (system default)"
 
 
+# CoreAudio open/stop can block indefinitely on a HAL mutex held by another
+# audio client (observed as a full main-thread deadlock with Wispr Flow
+# running), so every PortAudio call lives on a throwaway background thread —
+# the hotkey and UI stay alive no matter what the audio stack does.
 def start_recording():
-    global stream, state
+    global state, record_buf
     if state != "ready":
         return
     state = "recording"
-    frames.clear()
+    buf = []
+    record_buf = buf
+    overlay.show()
+    threading.Thread(target=_open_stream, args=(buf,), daemon=True).start()
+
+
+def _open_stream(buf):
+    global stream, state, locked
     try:
-        stream = sd.InputStream(
+        s = sd.InputStream(
             device=input_device,
             samplerate=SAMPLE_RATE,
             channels=1,
             dtype="float32",
-            callback=lambda data, *_: frames.append(data.copy()),
+            callback=lambda data, *_: buf.append(data.copy()),
         )
-        stream.start()
+        s.start()
     except sd.PortAudioError as e:
-        state = "ready"
         log(f"mic open failed: {e}\n(System Settings > Privacy & Security > Microphone)")
+        if buf is record_buf and state == "recording":
+            state = "ready"
+            locked = False
+            AppHelper.callAfter(overlay.hide)
         return
-    overlay.show()
+    if buf is record_buf and state == "recording":
+        stream = s
+    else:
+        # Released before the stream finished opening — discard
+        s.stop()
+        s.close()
 
 
 def stop_recording():
-    global stream, state
+    global state, stream, record_buf
     if state != "recording":
         return
     state = "ready"
     overlay.hide()
-    stream.stop()
-    stream.close()
+    s, buf = stream, record_buf
     stream = None
-    if not frames:
+    record_buf = None
+    threading.Thread(target=_finish_recording, args=(s, buf), daemon=True).start()
+
+
+def _finish_recording(s, buf):
+    if s is not None:
+        t0 = time.monotonic()
+        try:
+            s.stop()
+            s.close()
+        except sd.PortAudioError as e:
+            log(f"mic stop failed: {e}")
+        if time.monotonic() - t0 > 3:
+            log("audio device was slow to release — another audio app may be fighting for the mic")
+    if not buf:
         log("dropped: no audio captured")
         return
-    audio = np.concatenate(frames)[:, 0]
+    audio = np.concatenate(buf)[:, 0]
     secs = len(audio) / SAMPLE_RATE
     if secs < MIN_SECONDS:
         log(f"dropped: {secs:.2f}s is under the {MIN_SECONDS}s minimum")
@@ -144,7 +192,7 @@ def handle_flags_changed(event):
     if event.keyCode() != HOTKEY_KEYCODE:
         return
     now = time.monotonic()
-    if event.modifierFlags() & AppKit.NSEventModifierFlagOption:  # key down
+    if event.modifierFlags() & RIGHT_OPTION_MASK:  # key down
         if locked:
             locked = False
             stop_recording()
@@ -203,25 +251,51 @@ def worker():
     while True:
         audio = jobs.get()
         t0 = time.monotonic()
-        text = transcribe(audio)
-        if text:
-            paste(text)
-            append_history(text)
-        log(f"[{time.monotonic() - t0:.2f}s] {text or '(empty transcription, nothing pasted)'}")
+        # The sole worker must outlive any single bad job, or dictation dies
+        # silently while the UI still shows ready
+        try:
+            text = transcribe(audio)
+            if text:
+                paste(text)
+                append_history(text)
+            log(f"[{time.monotonic() - t0:.2f}s] {text or '(empty transcription, nothing pasted)'}")
+        except Exception as e:  # noqa: BLE001
+            log(f"transcription failed: {e!r} — dictation continues")
 
 
 def backend():
     global state, input_device, input_name
-    input_device, input_name = pick_input_device()
-    log(f"mic: {input_name}")
-    log(f"loading {MODEL} (first run downloads ~1.6 GB)...")
-    t0 = time.monotonic()
-    # Warmup on silence: pays model load + Metal kernel compilation now instead
-    # of on the first real dictation
-    transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32))
-    log(f"model ready in {time.monotonic() - t0:.1f}s — hold right Option to dictate")
-    state = "ready"
-    threading.Thread(target=worker, daemon=True).start()
+    # Without this boundary a failed download/device/model init leaves the
+    # menu bar stuck on "…" forever with no explanation
+    try:
+        input_device, input_name = pick_input_device()
+        log(f"mic: {input_name}")
+        log(f"loading {MODEL} (first run downloads ~1.6 GB)...")
+        t0 = time.monotonic()
+        # Warmup on silence: pays model load + Metal kernel compilation now
+        # instead of on the first real dictation
+        transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32))
+        log(f"model ready in {time.monotonic() - t0:.1f}s — hold right Option to dictate")
+        state = "ready"
+        threading.Thread(target=worker, daemon=True).start()
+    except Exception as e:  # noqa: BLE001
+        state = "error"
+        log(f"startup failed: {e!r}")
+        AppHelper.callAfter(startup_failed_alert, e)
+
+
+def startup_failed_alert(error):
+    choice = run_alert(
+        "Sotto failed to start",
+        f"{error}\n\nIf this was the first run, check your internet connection "
+        "(the model downloads once from Hugging Face) and relaunch. Details are "
+        "in the log.",
+        ["Open Log", "Quit"],
+    )
+    if choice == 0:
+        subprocess.run(["open", LOG_PATH], check=False)
+    else:
+        AppKit.NSApp.terminate_(None)
 
 
 def run_alert(title, text, buttons):
@@ -344,8 +418,9 @@ class Overlay(AppKit.NSObject):
 
     def tick_(self, _timer):
         rms = 0.0
-        if frames:
-            chunk = frames[-1]
+        buf = record_buf
+        if buf:
+            chunk = buf[-1]
             rms = float(np.sqrt((chunk**2).mean()))
         self.rms_history.append(rms)
         # Noise gate with an absolute margin: the floor is the quietest recent
@@ -409,17 +484,13 @@ class HistoryWindow(AppKit.NSObject):
         self.window, self.text_view = window, tv
 
     def renderText(self):
-        try:
-            with open(HISTORY_PATH) as f:
-                entries = [json.loads(line) for line in f]
-        except FileNotFoundError:
-            entries = []
+        entries = read_history_file()
         if not entries:
             return "No transcriptions yet.\n\nHold right Option, speak, release."
         blocks = []
-        for e in reversed(entries):
-            stamp = time.strftime("%b %d, %H:%M", time.localtime(e["t"]))
-            blocks.append(f"{stamp}\n{e['text']}")
+        for epoch, text in reversed(entries):
+            stamp = time.strftime("%b %d, %H:%M", time.localtime(epoch))
+            blocks.append(f"{stamp}\n{text}")
         return "\n\n".join(blocks)
 
 

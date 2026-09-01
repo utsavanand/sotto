@@ -1,4 +1,23 @@
 # Changelog
+## 1.3.2 — 2026-09-01
+
+Reliability release: fixes a main-thread deadlock and addresses a code review.
+
+- Fixed: CoreAudio's stop call could block forever on a HAL mutex held by
+  another audio client (observed with Wispr Flow running), freezing the
+  hotkey, menu bar, and overlay. All PortAudio open/stop calls now run on
+  background threads; the main thread can no longer be taken hostage.
+- Fixed: holding left Option masked a right-Option release (aggregate
+  modifier flag), leaving recording stuck on — now uses the device-specific
+  right-Option bit
+- A transcription error no longer kills the worker thread silently
+- A failed startup (network, device, model cache) now shows an error alert
+  and ⚠️ in the menu bar instead of hanging at "…" forever
+- A damaged history line no longer prevents launch; bad lines are skipped
+- install.sh stages the new bundle before replacing the old one, so a failed
+  build can't destroy a working install
+- Dependencies pinned to tested version ranges
+
 ## 1.3.1 — 2026-09-01
 
 - Recording pill redesign: frosted-glass HUD background, finer 24-bar
