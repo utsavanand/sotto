@@ -106,11 +106,11 @@ accuracy for speed and memory.
 ## Privacy
 
 Audio is captured only while the hotkey is held, processed in memory, and
-never written to disk or sent anywhere. The transcript goes to the clipboard
-, the local log file, and the local history file
+never written to disk or sent anywhere. The transcript goes to the clipboard,
+the local log file, and the local history file
 (`~/Library/Application Support/Sotto/history.jsonl`) — delete either any
-time. The model
-is fetched once from Hugging Face; nothing else touches the network.
+time. The model is fetched once from Hugging Face; nothing else touches the
+network.
 
 ## Development
 
