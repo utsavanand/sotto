@@ -189,6 +189,22 @@ def backend():
     threading.Thread(target=worker, daemon=True).start()
 
 
+def run_alert(title, text, buttons):
+    AppKit.NSApp.activateIgnoringOtherApps_(True)
+    alert = AppKit.NSAlert.alloc().init()
+    alert.setMessageText_(title)
+    alert.setInformativeText_(text)
+    for b in buttons:
+        alert.addButtonWithTitle_(b)
+    # Join all Spaces and float over fullscreen apps — otherwise the alert
+    # opens on another desktop and the user never sees it
+    alert.window().setCollectionBehavior_(
+        AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
+        | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
+    )
+    return alert.runModal() - AppKit.NSAlertFirstButtonReturn
+
+
 def prompt_missing_permissions():
     """Trigger the native macOS permission prompts, then explain the relaunch."""
     missing = []
@@ -201,19 +217,25 @@ def prompt_missing_permissions():
     if not missing:
         return
     log(f"missing permissions: {', '.join(missing)}")
-    AppKit.NSApp.activateIgnoringOtherApps_(True)
-    alert = AppKit.NSAlert.alloc().init()
-    alert.setMessageText_("Sotto needs two permissions")
-    alert.setInformativeText_(
+    choice = run_alert(
+        "Sotto needs two permissions",
         "Missing:\n• " + "\n• ".join(missing) + "\n\n"
         "Enable Sotto in System Settings > Privacy & Security "
         "(it may be listed as \"Python\"), then quit Sotto from the 🎙 menu "
-        "and open it again — grants only apply on a fresh launch."
+        "and open it again — grants only apply on a fresh launch.",
+        ["Open System Settings", "Later"],
     )
-    alert.addButtonWithTitle_("Open System Settings")
-    alert.addButtonWithTitle_("Later")
-    if alert.runModal() == AppKit.NSAlertFirstButtonReturn:
+    if choice == 0:
         AppKit.NSWorkspace.sharedWorkspace().openURL_(AppKit.NSURL.URLWithString_(SETTINGS_URL))
+
+
+def status_item_onscreen():
+    pid = os.getpid()
+    wins = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionAll, Quartz.kCGNullWindowID)
+    for w in wins:
+        if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowLayer") == 25:
+            return bool(w.get("kCGWindowIsOnscreen", False))
+    return None
 
 
 class StatusItem(AppKit.NSObject):
@@ -224,6 +246,18 @@ class StatusItem(AppKit.NSObject):
         if self.menu_version != history_version:
             self.menu_version = history_version
             self.rebuildMenu()
+        self.ticks += 1
+        if self.ticks == 10 and status_item_onscreen() is False:
+            log("WARNING: menu bar icon is hidden behind the notch — the menu bar is full")
+            run_alert(
+                "Sotto's icon is hidden behind the notch",
+                "Your menu bar is full, so macOS placed Sotto's icon in the notch "
+                "area where it can't be seen. Sotto still works — hold right "
+                "Option to dictate.\n\nTo see the icon, free up space: hold ⌘ and "
+                "drag unused menu bar icons off the bar, or quit other menu bar "
+                "apps, then relaunch Sotto.",
+                ["OK"],
+            )
 
     def rebuildMenu(self):
         menu = AppKit.NSMenu.alloc().init()
@@ -268,6 +302,7 @@ def install_status_item():
     item.button().setTitle_(TITLES[state])
     delegate.item = item
     delegate.menu_version = -1  # forces the first rebuildMenu from refresh_
+    delegate.ticks = 0
     timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
         0.3, delegate, "refresh:", None, True
     )
