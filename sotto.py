@@ -1,7 +1,7 @@
 """Sotto: hold right Option anywhere, speak, release — locally
 transcribed text is pasted into the focused app. See DESIGN.md."""
 
-import ctypes
+import collections
 import os
 import queue
 import subprocess
@@ -25,8 +25,10 @@ V_KEYCODE = 9
 MODEL = "mlx-community/whisper-large-v3-turbo"
 SAMPLE_RATE = 16_000
 MIN_SECONDS = 0.3
+HISTORY_SIZE = 10
 LOG_PATH = os.path.expanduser("~/Library/Logs/Sotto.log")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴"}
+SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
 jobs = queue.Queue()
 frames = []
@@ -35,6 +37,8 @@ tap = None
 state = "loading"  # loading | ready | recording
 input_device = None
 input_name = "system default"
+history = collections.deque(maxlen=HISTORY_SIZE)  # (time_str, text), newest first
+history_version = 0
 
 
 def log(msg):
@@ -128,8 +132,7 @@ def install_hotkey_tap():
     if tap is None:
         log(
             "WARNING: could not install the hotkey listener — grant Sotto in System "
-            "Settings > Privacy & Security > Accessibility and Input Monitoring, "
-            "then relaunch."
+            "Settings > Privacy & Security > Input Monitoring, then relaunch."
         )
         return False
     source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
@@ -143,8 +146,12 @@ def transcribe(audio):
     return mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL)["text"].strip()
 
 
-def paste(text):
+def set_clipboard(text):
     subprocess.run("pbcopy", input=text.encode(), check=True)
+
+
+def paste(text):
+    set_clipboard(text)
     for key_down in (True, False):
         event = Quartz.CGEventCreateKeyboardEvent(None, V_KEYCODE, key_down)
         Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
@@ -154,28 +161,20 @@ def paste(text):
 # All slow work happens here: the tap callback runs on the main run loop, and
 # blocking it stalls keyboard events system-wide until macOS disables the tap.
 def worker():
+    global history_version
     while True:
         audio = jobs.get()
         t0 = time.monotonic()
         text = transcribe(audio)
         if text:
             paste(text)
+            history.appendleft((time.strftime("%H:%M"), text))
+            history_version += 1
         log(f"[{time.monotonic() - t0:.2f}s] {text or '(empty transcription, nothing pasted)'}")
 
 
 def backend():
     global state, input_device, input_name
-    appsvc = ctypes.cdll.LoadLibrary(
-        "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
-    )
-    if not appsvc.AXIsProcessTrusted():
-        # The listen-only tap works on Input Monitoring alone, so dictation can
-        # look fine while every synthetic Cmd+V is silently dropped
-        log(
-            "WARNING: Accessibility not granted — transcription will work but the "
-            "paste will be silently dropped. Enable Sotto (or Python) in System "
-            "Settings > Privacy & Security > Accessibility, then relaunch."
-        )
     input_device, input_name = pick_input_device()
     log(f"mic: {input_name}")
     log(f"loading {MODEL} (first run downloads ~1.6 GB)...")
@@ -190,11 +189,69 @@ def backend():
     threading.Thread(target=worker, daemon=True).start()
 
 
+def prompt_missing_permissions():
+    """Trigger the native macOS permission prompts, then explain the relaunch."""
+    missing = []
+    if not Quartz.CGPreflightListenEventAccess():
+        missing.append("Input Monitoring (to see the hotkey)")
+        Quartz.CGRequestListenEventAccess()
+    if not Quartz.CGPreflightPostEventAccess():
+        missing.append("Accessibility (to paste the text)")
+        Quartz.CGRequestPostEventAccess()
+    if not missing:
+        return
+    log(f"missing permissions: {', '.join(missing)}")
+    AppKit.NSApp.activateIgnoringOtherApps_(True)
+    alert = AppKit.NSAlert.alloc().init()
+    alert.setMessageText_("Sotto needs two permissions")
+    alert.setInformativeText_(
+        "Missing:\n• " + "\n• ".join(missing) + "\n\n"
+        "Enable Sotto in System Settings > Privacy & Security "
+        "(it may be listed as \"Python\"), then quit Sotto from the 🎙 menu "
+        "and open it again — grants only apply on a fresh launch."
+    )
+    alert.addButtonWithTitle_("Open System Settings")
+    alert.addButtonWithTitle_("Later")
+    if alert.runModal() == AppKit.NSAlertFirstButtonReturn:
+        AppKit.NSWorkspace.sharedWorkspace().openURL_(AppKit.NSURL.URLWithString_(SETTINGS_URL))
+
+
 class StatusItem(AppKit.NSObject):
     def refresh_(self, _timer):
         button = self.item.button()
         if button.title() != TITLES[state]:
             button.setTitle_(TITLES[state])
+        if self.menu_version != history_version:
+            self.menu_version = history_version
+            self.rebuildMenu()
+
+    def rebuildMenu(self):
+        menu = AppKit.NSMenu.alloc().init()
+        if history:
+            for stamp, text in history:
+                label = text if len(text) <= 60 else text[:57] + "…"
+                entry = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    f"{stamp}  {label}", "copyTranscript:", ""
+                )
+                entry.setTarget_(self)
+                entry.setRepresentedObject_(text)
+                entry.setToolTip_("Click to copy")
+                menu.addItem_(entry)
+        else:
+            placeholder = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "No transcriptions yet", None, ""
+            )
+            placeholder.setEnabled_(False)
+            menu.addItem_(placeholder)
+        menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        for title, action, key in (("Open Log", "openLog:", ""), ("Quit Sotto", "quit:", "q")):
+            entry = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, key)
+            entry.setTarget_(self)
+            menu.addItem_(entry)
+        self.item.setMenu_(menu)
+
+    def copyTranscript_(self, sender):
+        set_clipboard(sender.representedObject())
 
     def openLog_(self, _sender):
         subprocess.run(["open", LOG_PATH], check=False)
@@ -209,13 +266,8 @@ def install_status_item():
         AppKit.NSVariableStatusItemLength
     )
     item.button().setTitle_(TITLES[state])
-    menu = AppKit.NSMenu.alloc().init()
-    for title, action, key in (("Open Log", "openLog:", ""), ("Quit Sotto", "quit:", "q")):
-        entry = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, key)
-        entry.setTarget_(delegate)
-        menu.addItem_(entry)
-    item.setMenu_(menu)
     delegate.item = item
+    delegate.menu_version = -1  # forces the first rebuildMenu from refresh_
     timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
         0.3, delegate, "refresh:", None, True
     )
@@ -229,6 +281,7 @@ def main():
     # bundle identity and takes over the app menu as "Python".
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
     refs = install_status_item()  # noqa: F841 — keep AppKit objects alive
+    prompt_missing_permissions()
     threading.Thread(target=backend, daemon=True).start()
     AppHelper.runEventLoop()
 
