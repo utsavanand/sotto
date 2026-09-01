@@ -1,4 +1,13 @@
 # Changelog
+## 1.3.5 — 2026-09-01
+
+- install.sh recreates the venv when it was built by a pre-3.13 Python, so an
+  upgrade can't pair old wheels with the 3.13 hash lock
+- Existing log/history files are chmodded 0600 at startup (the private opener
+  only covered newly created files)
+- CI runs static checks on Python 3.13 (matching production) and adds an
+  arm64 macOS job that dry-run resolves the hashed lock
+
 ## 1.3.4 — 2026-09-01
 
 Security and hardening release.

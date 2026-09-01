@@ -650,6 +650,13 @@ def install_status_item():
 def main():
     global overlay, history_win
     os.makedirs(SUPPORT_DIR, exist_ok=True)
+    # Migrate transcript files created by older versions to private mode;
+    # _private_opener only covers newly created files
+    for path in (LOG_PATH, HISTORY_PATH):
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
     app = AppKit.NSApplication.sharedApplication()
     # Accessory: menu-bar only. Without this the process inherits Python.app's
     # bundle identity and takes over the app menu as "Python".

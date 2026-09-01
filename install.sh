@@ -13,6 +13,12 @@ STAGE="/Applications/.Sotto.app.new"
 
 echo "installing python environment into $SUPPORT ..."
 mkdir -p "$SUPPORT"
+# A venv left behind by an older release may be a pre-3.13 Python whose
+# wheels don't match the hashed lock — recreate it rather than reuse it
+if [[ -x "$SUPPORT/venv/bin/python" ]]; then
+  "$SUPPORT/venv/bin/python" -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else 1)' \
+    || { echo "recreating venv (old Python version)"; rm -rf "$SUPPORT/venv"; }
+fi
 [[ -x "$SUPPORT/venv/bin/python" ]] || python3 -m venv "$SUPPORT/venv"
 # Hash-verified, fully pinned install: a compromised upstream release can't
 # slip into an app that holds mic + Accessibility permissions
