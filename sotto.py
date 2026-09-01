@@ -26,6 +26,8 @@ V_KEYCODE = 9
 MODEL = "mlx-community/whisper-large-v3-turbo"
 SAMPLE_RATE = 16_000
 MIN_SECONDS = 0.3
+TAP_MAX_SECONDS = 0.35  # a press shorter than this counts as a tap
+DOUBLE_TAP_SECONDS = 0.5  # two taps within this window lock hands-free mode
 HISTORY_SIZE = 10
 LOG_PATH = os.path.expanduser("~/Library/Logs/Sotto.log")
 SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
@@ -44,6 +46,9 @@ history = collections.deque(maxlen=HISTORY_SIZE)  # (time_str, text), newest fir
 history_version = 0
 overlay = None
 history_win = None
+locked = False
+press_time = 0.0
+last_tap = 0.0
 
 
 def log(msg):
@@ -135,11 +140,28 @@ def stop_recording():
 
 
 def handle_flags_changed(event):
-    if event.keyCode() == HOTKEY_KEYCODE:
-        if event.modifierFlags() & AppKit.NSEventModifierFlagOption:
-            start_recording()
-        else:
+    global locked, press_time, last_tap
+    if event.keyCode() != HOTKEY_KEYCODE:
+        return
+    now = time.monotonic()
+    if event.modifierFlags() & AppKit.NSEventModifierFlagOption:  # key down
+        if locked:
+            locked = False
             stop_recording()
+        else:
+            press_time = now
+            start_recording()
+    else:  # key up
+        if locked or state != "recording":
+            return
+        if now - press_time < TAP_MAX_SECONDS:
+            # Double-tap: keep recording hands-free until the next tap
+            if now - last_tap < DOUBLE_TAP_SECONDS:
+                locked = True
+                log("hands-free recording — tap right Option to stop")
+                return
+            last_tap = now
+        stop_recording()
 
 
 # NSEvent monitors instead of a CGEventTap: same job for a single modifier
@@ -245,23 +267,27 @@ def status_item_onscreen():
     return None
 
 
+OVERLAY_SIZE = (170, 34)
+BAR_COUNT = 10
+
+
 class LevelView(AppKit.NSView):
     def drawRect_(self, _rect):
         bounds = self.bounds()
-        pill = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(bounds, 22, 22)
-        AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.08, 0.92).setFill()
+        pill = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(bounds, 17, 17)
+        AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.1, 0.85).setFill()
         pill.fill()
         mid = bounds.size.height / 2
-        dot = AppKit.NSBezierPath.bezierPathWithOvalInRect_(((18, mid - 5), (10, 10)))
+        dot = AppKit.NSBezierPath.bezierPathWithOvalInRect_(((16, mid - 4), (8, 8)))
         AppKit.NSColor.systemRedColor().setFill()
         dot.fill()
         levels = getattr(self, "levels", [])
-        AppKit.NSColor.whiteColor().setFill()
-        for i in range(14):
+        AppKit.NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.8).setFill()
+        for i in range(BAR_COUNT):
             lvl = levels[i] if i < len(levels) else 0.0
-            h = 4 + lvl * 26
+            h = 3 + lvl * 16
             bar = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                ((44 + i * 11, mid - h / 2), (7, h)), 2, 2
+                ((38 + i * 12, mid - h / 2), (6, h)), 2, 2
             )
             bar.fill()
 
@@ -270,7 +296,7 @@ class Overlay(AppKit.NSObject):
     """Floating bottom-center pill with a live mic level animation."""
 
     def build(self):
-        size = (210, 44)
+        size = OVERLAY_SIZE
         panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             ((0, 0), size),
             AppKit.NSWindowStyleMaskBorderless | AppKit.NSWindowStyleMaskNonactivatingPanel,
@@ -291,10 +317,12 @@ class Overlay(AppKit.NSObject):
 
     def show(self):
         screen = AppKit.NSScreen.mainScreen().frame()
-        w, h = 210, 44
+        w, h = OVERLAY_SIZE
         x = screen.origin.x + (screen.size.width - w) / 2
         self.panel.setFrame_display_(((x, screen.origin.y + 110), (w, h)), True)
         self.view.levels = []
+        self.rms_history = collections.deque(maxlen=30)
+        self.displayed = 0.0
         self.panel.orderFrontRegardless()
         self.timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.07, self, "tick:", None, True
@@ -307,11 +335,23 @@ class Overlay(AppKit.NSObject):
         self.panel.orderOut_(None)
 
     def tick_(self, _timer):
-        level = 0.0
+        rms = 0.0
         if frames:
             chunk = frames[-1]
-            level = min(1.0, float(np.sqrt((chunk**2).mean())) * 18)
-        self.view.levels = (getattr(self.view, "levels", []) + [level])[-14:]
+            rms = float(np.sqrt((chunk**2).mean()))
+        # Adaptive: normalize against the rolling noise floor and recent peak,
+        # so ambient room noise sits flat and only speech moves the bars
+        self.rms_history.append(rms)
+        floor = min(self.rms_history)
+        ceiling = max(max(self.rms_history), floor + 0.01)
+        target = (rms - floor) / (ceiling - floor)
+        target = 0.0 if target < 0.15 else min(1.0, target)
+        # Fast attack, slow decay reads as speech rather than jitter
+        if target > self.displayed:
+            self.displayed = 0.5 * self.displayed + 0.5 * target
+        else:
+            self.displayed = 0.75 * self.displayed + 0.25 * target
+        self.view.levels = (getattr(self.view, "levels", []) + [self.displayed])[-BAR_COUNT:]
         self.view.setNeedsDisplay_(True)
 
 
@@ -431,6 +471,15 @@ class StatusItem(AppKit.NSObject):
         AppKit.NSApp.terminate_(None)
 
 
+class AppDelegate(AppKit.NSObject):
+    # Launching Sotto again while it runs (Launchpad, Finder, `open`) lands
+    # here — show the history window, since the menu bar icon can be hidden
+    # behind the notch on a crowded menu bar
+    def applicationShouldHandleReopen_hasVisibleWindows_(self, _app, _has_windows):
+        history_win.show()
+        return False
+
+
 def install_status_item():
     delegate = StatusItem.alloc().init()
     item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
@@ -454,6 +503,8 @@ def main():
     # Accessory: menu-bar only. Without this the process inherits Python.app's
     # bundle identity and takes over the app menu as "Python".
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+    delegate = AppDelegate.alloc().init()
+    app.setDelegate_(delegate)
     load_history()
     refs = install_status_item()  # noqa: F841 — keep AppKit objects alive
     overlay = Overlay.alloc().init()

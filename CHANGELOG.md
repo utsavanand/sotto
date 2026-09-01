@@ -1,4 +1,15 @@
 # Changelog
+## 1.3.0 — 2026-09-01
+
+- Hands-free mode: double-tap right Option to lock recording on, tap once to
+  stop and paste
+- Recording pill is smaller and calmer: levels are normalized against a
+  rolling ambient-noise floor with fast-attack/slow-decay smoothing, so the
+  bars sit flat in a quiet room and move on speech
+- Launching Sotto while it's already running opens the History window —
+  reachable even when the menu bar icon is hidden behind the notch
+- README: release badge and an architecture diagram
+
 ## 1.2.0 — 2026-09-01
 
 - On-screen recording indicator: a floating pill at the bottom of the screen

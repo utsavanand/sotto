@@ -8,6 +8,7 @@
     <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-0071e3" alt="Apple Silicon">
     <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
     <a href="https://github.com/utsavanand/sotto/actions/workflows/ci.yml"><img src="https://github.com/utsavanand/sotto/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <a href="https://github.com/utsavanand/sotto/releases/latest"><img src="https://img.shields.io/github/v/release/utsavanand/sotto" alt="Latest release"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/utsavanand/sotto" alt="License"></a>
   </p>
 </div>
@@ -28,8 +29,9 @@ model download.
 - **Fast** — under 1.5 s from key-release to text on an M-series GPU
   (0.5 s typical on an M4 Max), with large-model accuracy
 - **Menu bar status** — `…` loading · `🎙` ready · `🔴` recording
-- **Recording indicator** — floating pill with a live mic level animation
-  while the hotkey is held
+- **Recording indicator** — floating pill with a live mic level animation,
+  normalized against ambient noise so only speech moves the bars
+- **Hands-free mode** — double-tap the hotkey to lock recording, tap to stop
 - **History** — every transcript saved locally; browse in 🎙 → History…,
   or click a recent one in the menu to copy it
 - **Self-diagnosing** — every dictation logs its mic, duration, signal level,
@@ -65,12 +67,20 @@ seconds. To run at login: System Settings → General → Login Items → add So
 
 ## Usage
 
-1. Put your cursor where the text should go
-2. Hold <kbd>⌥ right Option</kbd> — the menu bar icon turns 🔴
-3. Speak (give it a beat after pressing; the mic takes a moment to open)
-4. Release — the transcription is pasted at your cursor
+**Hold to talk** — put your cursor where the text should go, hold
+<kbd>⌥ right Option</kbd>, speak, release. The transcription is pasted at
+your cursor. A floating pill at the bottom of the screen shows the live mic
+level while recording.
+
+**Hands-free** — double-tap <kbd>⌥ right Option</kbd> to lock recording on,
+speak as long as you like, then tap once to stop and paste.
 
 ## FAQ
+
+**Where do I see everything I've dictated?**
+🎙 → History…, or — if the menu bar icon is hidden behind the notch — just
+launch Sotto again (Launchpad, Finder, or `open /Applications/Sotto.app`)
+while it's running: the History window opens.
 
 **The hotkey does nothing.**
 Almost always permissions: check that *Sotto* (not your terminal) is enabled
@@ -102,6 +112,27 @@ dictation.
 Both are constants at the top of `sotto.py`; re-run `./install.sh` after
 editing. Smaller models (e.g. `mlx-community/whisper-small-mlx`) trade
 accuracy for speed and memory.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    K["right Option (hold or double-tap)"] --> M["NSEvent global monitor (main run loop)"]
+    M --> R["Recorder — sounddevice, 16 kHz"]
+    M -.-> O["Overlay pill — live mic level"]
+    R --> Q[["audio queue"]]
+    Q --> W["Worker thread"]
+    W --> T["mlx-whisper — large-v3-turbo on the Apple GPU"]
+    T --> P["Clipboard + synthetic Cmd+V"]
+    P --> A["Focused app"]
+    T --> H[("history.jsonl")]
+    H --> V["History window"]
+```
+
+The hotkey handler and UI live on the main run loop; recording callbacks and
+transcription run off it (audio thread, worker thread) so a slow inference can
+never stall key handling. Why NSEvent instead of a CGEventTap, why the
+built-in mic is forced, and the rest of the trade-offs: [DESIGN.md](DESIGN.md).
 
 ## Privacy
 
