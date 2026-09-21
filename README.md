@@ -40,8 +40,25 @@ model download.
 
 ## Install
 
-Requires an Apple Silicon Mac and Python 3.13 (`brew install python@3.13` —
-exact version because the lock file pins hash-verified 3.13 wheels).
+Requires an Apple Silicon Mac on macOS 14 or newer, and Python 3.13 — that
+exact minor version, because the lock file pins hash-verified 3.13 wheels.
+
+On a fresh Mac, two one-time steps first:
+
+```sh
+# 1. Homebrew (also installs git via the Xcode Command Line Tools)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# then run the one or two `eval` lines the installer prints at the end,
+# so `brew` is on your PATH
+
+# 2. Python 3.13
+brew install python@3.13
+```
+
+`install.sh` finds the interpreter as `python3.13`, so it doesn't matter
+what plain `python3` points to on your machine.
+
+Then:
 
 ```sh
 git clone https://github.com/utsavanand/sotto && cd sotto
@@ -147,7 +164,7 @@ network.
 ## Development
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./run.sh    # runs from the repo, logs to the terminal
 ```
 

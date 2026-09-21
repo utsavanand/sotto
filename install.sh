@@ -2,9 +2,20 @@
 set -euo pipefail
 
 [[ "$(uname -m)" == "arm64" ]] || { echo "Sotto requires Apple Silicon (transcription runs on MLX)"; exit 1; }
-command -v python3 >/dev/null || { echo "python3 not found — install with: brew install python"; exit 1; }
-python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else 1)' \
-  || { echo "python 3.13 required (the hashed lock file pins 3.13 wheels) — install with: brew install python@3.13"; exit 1; }
+
+# Find a 3.13 interpreter by its versioned name first: after
+# `brew install python@3.13` the unversioned `python3` on PATH is often a
+# different version (Apple's /usr/bin/python3, or Homebrew's newer default)
+PY=""
+for cand in python3.13 python3; do
+  if command -v "$cand" >/dev/null \
+     && "$cand" -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else 1)' 2>/dev/null; then
+    PY="$(command -v "$cand")"
+    break
+  fi
+done
+[[ -n "$PY" ]] || { echo "python 3.13 not found (the hashed lock file pins 3.13 wheels) — install with: brew install python@3.13"; exit 1; }
+echo "using $PY"
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 SUPPORT="$HOME/Library/Application Support/Sotto"
@@ -19,7 +30,7 @@ if [[ -x "$SUPPORT/venv/bin/python" ]]; then
   "$SUPPORT/venv/bin/python" -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else 1)' \
     || { echo "recreating venv (old Python version)"; rm -rf "$SUPPORT/venv"; }
 fi
-[[ -x "$SUPPORT/venv/bin/python" ]] || python3 -m venv "$SUPPORT/venv"
+[[ -x "$SUPPORT/venv/bin/python" ]] || "$PY" -m venv "$SUPPORT/venv"
 # Hash-verified, fully pinned install: a compromised upstream release can't
 # slip into an app that holds mic + Accessibility permissions
 "$SUPPORT/venv/bin/pip" install --quiet --require-hashes --no-deps --timeout 60 --retries 10 -r "$SRC/requirements.lock"
