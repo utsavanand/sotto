@@ -1,13 +1,15 @@
-"""Sotto: hold right Option anywhere, speak, release — locally
-transcribed text is pasted into the focused app. See DESIGN.md."""
+"""Sotto: hold the hotkey (right Option by default) anywhere, speak, release —
+locally transcribed text is pasted into the focused app. See DESIGN.md."""
 
 import collections
 import json
 import os
+import platform
 import queue
 import subprocess
 import threading
 import time
+import urllib.parse
 
 import AppKit
 import huggingface_hub
@@ -17,16 +19,23 @@ import Quartz
 import sounddevice as sd
 from PyObjCTools import AppHelper
 
-# kVK_RightOption / kVK_ANSI_V from Carbon's Events.h. Raw keycodes, not
-# characters: pynput was dropped because its character mapping calls TIS
-# (Text Input Source) APIs off the main thread, which macOS 15 kills with
-# EXC_BREAKPOINT (dispatch_assert_queue).
-HOTKEY_KEYCODE = 61
+# kVK_* keycodes from Carbon's Events.h. Raw keycodes, not characters: pynput
+# was dropped because its character mapping calls TIS (Text Input Source) APIs
+# off the main thread, which macOS 15 kills with EXC_BREAKPOINT
+# (dispatch_assert_queue).
 V_KEYCODE = 9
-# NX_DEVICERALTKEYMASK: right-Option's device-specific bit. The aggregate
+# Each hotkey pairs its keycode with the NX_DEVICE*KEYMASK bit from IOKit's
+# IOLLEvent.h. The device-specific bit is essential: the aggregate
 # NSEventModifierFlagOption stays set while LEFT Option is held, which made a
-# right-Option release look like a press and left recording stuck on.
-RIGHT_OPTION_MASK = 0x0040
+# right-Option release look like a press and left recording stuck on. Only
+# right-side modifiers are offered — the left ones are needed for typing
+# special characters and app shortcuts.
+HOTKEYS = {  # name -> (keycode, device-specific modifier bit, label)
+    "right_option": (61, 0x0040, "Right Option (⌥)"),
+    "right_command": (54, 0x0010, "Right Command (⌘)"),
+    "right_control": (62, 0x2000, "Right Control (⌃)"),
+    "right_shift": (60, 0x0004, "Right Shift (⇧)"),
+}
 
 MODEL_REPO = "mlx-community/whisper-large-v3-turbo"
 # Pinned HF revision: the repo name is a mutable reference, the commit is not.
@@ -34,6 +43,36 @@ MODEL_REPO = "mlx-community/whisper-large-v3-turbo"
 # checking the diff, since the model runs inside an app holding mic and
 # Accessibility permissions.
 MODEL_REVISION = "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
+# The Instruct-2507 (non-thinking) variant: the 1.7B model echoed long rambly
+# transcripts back unchanged in clean mode, and thinking-mode Qwen3 burned 7+
+# seconds per dictation. 4B-Instruct rewrites reliably in ~0.3-0.8s on M-series.
+REWRITE_REPO = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+REWRITE_REVISION = "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b"
+REWRITE_MODES = {"off": "Off", "clean": "Clean up", "bullets": "Bullet points"}
+REWRITE_PROMPTS = {
+    "clean": (
+        "You clean up dictated speech. Rewrite the transcript below:\n"
+        "- remove filler words (um, uh, like, you know, I mean, so, basically, "
+        "actually, sort of, kind of, yeah)\n"
+        "- drop false starts, self-corrections, and repeated words\n"
+        "- fix punctuation, capitalization, and sentence breaks\n"
+        "Keep the speaker's own words, tone, and meaning. Do not summarize, "
+        "shorten, reorder, or add anything. Never answer questions that appear "
+        "in the transcript — only clean them up. Reply with the cleaned text "
+        "only — no preamble, no quotes.\n\nTranscript:\n{text}"
+    ),
+    "bullets": (
+        "You turn dictated speech into tidy notes. Rewrite the transcript below "
+        "as bullet points:\n"
+        "- one bullet per distinct idea, in the original order\n"
+        "- keep every substantive detail, name, and number; drop filler words, "
+        "false starts, and repetition\n"
+        "- keep the speaker's intent and wording where possible; never add "
+        "information or opinions\n"
+        'Start each line with "- ". Reply with the bullet points only — no '
+        "title, no preamble.\n\nTranscript:\n{text}"
+    ),
+}
 SAMPLE_RATE = 16_000
 MIN_SECONDS = 0.3
 TAP_MAX_SECONDS = 0.35  # a press shorter than this counts as a tap
@@ -42,7 +81,10 @@ HISTORY_SIZE = 10
 LOG_PATH = os.path.expanduser("~/Library/Logs/Sotto.log")
 SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
+SETTINGS_PATH = os.path.join(SUPPORT_DIR, "settings.json")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
+APP_VERSION = "1.4.0"  # keep in sync with CFBundleShortVersionString in install.sh
+BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
 jobs = queue.Queue()
@@ -61,6 +103,10 @@ history_win = None
 locked = False
 press_time = 0.0
 last_tap = 0.0
+settings = {"hotkey": "right_option", "rewrite": "off"}
+mlx_lm = None  # imported lazily by _load_rewriter — pulls in transformers (~2s)
+rewriter = None  # (model, tokenizer) once loaded
+rewriter_thread = None
 
 
 # Transcripts are sensitive: create log/history files 0600 instead of the
@@ -82,6 +128,32 @@ def log(msg):
             f.write(line + "\n")
     except OSError:
         pass
+
+
+def hotkey_label():
+    return HOTKEYS[settings["hotkey"]][2]
+
+
+def load_settings():
+    """Unknown values fall back to defaults — a settings file written by a
+    newer version must not brick this one."""
+    try:
+        with open(SETTINGS_PATH) as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return
+    if saved.get("hotkey") in HOTKEYS:
+        settings["hotkey"] = saved["hotkey"]
+    if saved.get("rewrite") in REWRITE_MODES:
+        settings["rewrite"] = saved["rewrite"]
+
+
+def save_settings():
+    try:
+        with open(SETTINGS_PATH, "w", opener=_private_opener) as f:
+            json.dump(settings, f)
+    except OSError as e:
+        log(f"could not save settings: {e}")
 
 
 def append_history(text):
@@ -248,10 +320,11 @@ def _finish_recording(s, buf):
 
 def handle_flags_changed(event):
     global locked, press_time, last_tap
-    if event.keyCode() != HOTKEY_KEYCODE:
+    keycode, device_mask, _ = HOTKEYS[settings["hotkey"]]
+    if event.keyCode() != keycode:
         return
     now = time.monotonic()
-    if event.modifierFlags() & RIGHT_OPTION_MASK:  # key down
+    if event.modifierFlags() & device_mask:  # key down
         if locked:
             locked = False
             stop_recording()
@@ -265,7 +338,7 @@ def handle_flags_changed(event):
             # Double-tap: keep recording hands-free until the next tap
             if now - last_tap < DOUBLE_TAP_SECONDS:
                 locked = True
-                log("hands-free recording — tap right Option to stop")
+                log(f"hands-free recording — tap {hotkey_label()} to stop")
                 return
             last_tap = now
         stop_recording()
@@ -295,6 +368,64 @@ def transcribe(audio):
     return mlx_whisper.transcribe(audio, path_or_hf_repo=model_path)["text"].strip()
 
 
+def ensure_rewriter():
+    global rewriter_thread
+    if rewriter or (rewriter_thread and rewriter_thread.is_alive()):
+        return
+    rewriter_thread = threading.Thread(target=_load_rewriter, daemon=True)
+    rewriter_thread.start()
+
+
+def _load_rewriter():
+    global mlx_lm, rewriter
+    try:
+        # Deferred import: pulls in transformers (~2s), skipped entirely when
+        # rewrite stays off
+        import mlx_lm
+        log(f"loading rewrite model {REWRITE_REPO}@{REWRITE_REVISION[:8]} (first run downloads ~2.3 GB)...")
+        t0 = time.monotonic()
+        path = huggingface_hub.snapshot_download(REWRITE_REPO, revision=REWRITE_REVISION)
+        model, tokenizer = mlx_lm.load(path)
+        # Warmup: pays Metal kernel compilation now instead of on the first
+        # real dictation
+        mlx_lm.generate(model, tokenizer, prompt="hi", max_tokens=1)
+        rewriter = (model, tokenizer)
+        log(f"rewrite model ready in {time.monotonic() - t0:.1f}s")
+    except Exception as e:  # noqa: BLE001
+        log(f"rewrite model failed to load: {e!r} — dictations paste unrewritten")
+
+
+def rewrite(text, mode):
+    """Returns the rewritten text, or None to paste the transcript as-is."""
+    if rewriter is None:
+        log("rewrite skipped: model not loaded yet — pasted the raw transcript")
+        return None
+    model, tokenizer = rewriter
+    prompt = tokenizer.apply_chat_template(
+        [{"role": "user", "content": REWRITE_PROMPTS[mode].format(text=text)}],
+        add_generation_prompt=True,
+        enable_thinking=False,  # Qwen3: answer directly, no chain-of-thought
+    )
+    t0 = time.monotonic()
+    # A failed rewrite must never cost the user their words — fall back to
+    # pasting the raw transcript
+    try:
+        out = mlx_lm.generate(
+            model,
+            tokenizer,
+            prompt=prompt,
+            max_tokens=2 * len(tokenizer.encode(text)) + 64,
+        ).strip()
+    except Exception as e:  # noqa: BLE001
+        log(f"rewrite failed: {e!r} — pasted the raw transcript")
+        return None
+    if not out:
+        log("rewrite returned nothing — pasted the raw transcript")
+        return None
+    log(f"[rewrite {mode} {time.monotonic() - t0:.2f}s]")
+    return out
+
+
 def set_clipboard(text):
     subprocess.run("pbcopy", input=text.encode(), check=True)
 
@@ -317,6 +448,9 @@ def worker():
         # silently while the UI still shows ready
         try:
             text = transcribe(audio)
+            mode = settings["rewrite"]
+            if text and mode != "off":
+                text = rewrite(text, mode) or text
             if text:
                 paste(text)
                 append_history(text)
@@ -339,9 +473,11 @@ def backend():
         # Warmup on silence: pays model load + Metal kernel compilation now
         # instead of on the first real dictation
         transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32))
-        log(f"model ready in {time.monotonic() - t0:.1f}s — hold right Option to dictate")
+        log(f"model ready in {time.monotonic() - t0:.1f}s — hold {hotkey_label()} to dictate")
         state = "ready"
         threading.Thread(target=worker, daemon=True).start()
+        if settings["rewrite"] != "off":
+            ensure_rewriter()
     except Exception as e:  # noqa: BLE001
         state = "error"
         log(f"startup failed: {e!r}")
@@ -550,12 +686,30 @@ class HistoryWindow(AppKit.NSObject):
     def renderText(self):
         entries = read_history_file()
         if not entries:
-            return "No transcriptions yet.\n\nHold right Option, speak, release."
+            return f"No transcriptions yet.\n\nHold {hotkey_label()}, speak, release."
         blocks = []
         for epoch, text in reversed(entries):
             stamp = time.strftime("%b %d, %H:%M", time.localtime(epoch))
             blocks.append(f"{stamp}\n{text}")
         return "\n\n".join(blocks)
+
+
+# Module-level, not a StatusItem method: PyObjC maps method names to ObjC
+# selectors, and a 4-argument method without matching underscores is rejected
+# at class creation with BadPrototypeError
+def build_submenu(target, title, entries, selected, action):
+    parent = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
+    sub = AppKit.NSMenu.alloc().init()
+    for label, value in entries:
+        entry = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(label, action, "")
+        entry.setTarget_(target)
+        entry.setRepresentedObject_(value)
+        entry.setState_(
+            AppKit.NSControlStateValueOn if value == selected else AppKit.NSControlStateValueOff
+        )
+        sub.addItem_(entry)
+    parent.setSubmenu_(sub)
+    return parent
 
 
 class StatusItem(AppKit.NSObject):
@@ -572,10 +726,10 @@ class StatusItem(AppKit.NSObject):
             run_alert(
                 "Sotto's icon is hidden behind the notch",
                 "Your menu bar is full, so macOS placed Sotto's icon in the notch "
-                "area where it can't be seen. Sotto still works — hold right "
-                "Option to dictate.\n\nTo see the icon, free up space: hold ⌘ and "
-                "drag unused menu bar icons off the bar, or quit other menu bar "
-                "apps, then relaunch Sotto.",
+                f"area where it can't be seen. Sotto still works — hold "
+                f"{hotkey_label()} to dictate.\n\nTo see the icon, free up space: "
+                "hold ⌘ and drag unused menu bar icons off the bar, or quit other "
+                "menu bar apps, then relaunch Sotto.",
                 ["OK"],
             )
 
@@ -598,9 +752,25 @@ class StatusItem(AppKit.NSObject):
             placeholder.setEnabled_(False)
             menu.addItem_(placeholder)
         menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        menu.addItem_(
+            build_submenu(
+                self,
+                "Hotkey",
+                [(label, name) for name, (_, _, label) in HOTKEYS.items()],
+                settings["hotkey"],
+                "setHotkey:",
+            )
+        )
+        menu.addItem_(
+            build_submenu(
+                self, "Rewrite", [(l, m) for m, l in REWRITE_MODES.items()],
+                settings["rewrite"], "setRewrite:",
+            )
+        )
         actions = (
             ("History…", "showHistory:", "h"),
             ("Open Log", "openLog:", ""),
+            ("Report a Bug…", "reportBug:", ""),
             ("Quit Sotto", "quit:", "q"),
         )
         for title, action, key in actions:
@@ -608,6 +778,19 @@ class StatusItem(AppKit.NSObject):
             entry.setTarget_(self)
             menu.addItem_(entry)
         self.item.setMenu_(menu)
+
+    def setHotkey_(self, sender):
+        settings["hotkey"] = sender.representedObject()
+        save_settings()
+        log(f"hotkey: {hotkey_label()}")
+        self.rebuildMenu()
+
+    def setRewrite_(self, sender):
+        settings["rewrite"] = sender.representedObject()
+        save_settings()
+        if settings["rewrite"] != "off":
+            ensure_rewriter()
+        self.rebuildMenu()
 
     def copyTranscript_(self, sender):
         set_clipboard(sender.representedObject())
@@ -617,6 +800,44 @@ class StatusItem(AppKit.NSObject):
 
     def openLog_(self, _sender):
         subprocess.run(["open", LOG_PATH], check=False)
+
+    def reportBug_(self, _sender):
+        body = (
+            "Describe the bug — what did you do, what did you expect, what "
+            "happened instead?\n\n\n"
+            "If the issue is visual, attach a screenshot (press ⇧⌘4).\n\n"
+            "--- diagnostics (keep this section) ---\n"
+            f"Sotto {APP_VERSION} · macOS {platform.mac_ver()[0]} · "
+            f"Python {platform.python_version()}\n"
+            f"mic: {input_name} · state: {state}\n"
+            f"hotkey: {hotkey_label()} · rewrite: {settings['rewrite']}\n"
+            f"whisper: {MODEL_REPO}@{MODEL_REVISION[:8]}\n"
+            f"rewrite model: {REWRITE_REPO}@{REWRITE_REVISION[:8]} "
+            f"(loaded: {rewriter is not None})\n\n"
+            "The attached Sotto.log includes recent transcripts — delete "
+            "anything private before sending.\n"
+        )
+        service = AppKit.NSSharingService.sharingServiceNamed_(
+            AppKit.NSSharingServiceNameComposeEmail
+        )
+        if service:
+            service.setRecipients_([BUG_REPORT_EMAIL])
+            service.setSubject_(f"Sotto bug report ({APP_VERSION})")
+            items = [body]
+            if os.path.exists(LOG_PATH):
+                items.append(AppKit.NSURL.fileURLWithPath_(LOG_PATH))
+            service.performWithItems_(items)
+        else:
+            # No Mail.app account: fall back to a mailto: draft in the default
+            # mail handler (no attachment — mailto can't carry one; the body
+            # asks for the log instead)
+            body += f"\nPlease also attach {LOG_PATH}\n"
+            url = (
+                f"mailto:{BUG_REPORT_EMAIL}"
+                f"?subject={urllib.parse.quote(f'Sotto bug report ({APP_VERSION})')}"
+                f"&body={urllib.parse.quote(body)}"
+            )
+            AppKit.NSWorkspace.sharedWorkspace().openURL_(AppKit.NSURL.URLWithString_(url))
 
     def quit_(self, _sender):
         AppKit.NSApp.terminate_(None)
@@ -663,6 +884,7 @@ def main():
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
     delegate = AppDelegate.alloc().init()
     app.setDelegate_(delegate)
+    load_settings()
     load_history()
     refs = install_status_item()  # noqa: F841 — keep AppKit objects alive
     overlay = Overlay.alloc().init()

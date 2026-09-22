@@ -1,4 +1,25 @@
 # Changelog
+## 1.4.0 — 2026-09-21
+
+- Hotkey is now chosen from the menu bar (🎙 → Hotkey): right Option
+  (default), right Command, right Control, or right Shift; persisted in
+  `~/Library/Application Support/Sotto/settings.json` (0600)
+- Optional on-device rewrite before pasting (🎙 → Rewrite): *Clean up* strips
+  filler words, false starts, and repeats and fixes punctuation; *Bullet
+  points* turns a dictated ramble into a list. Runs
+  Qwen3-4B-Instruct-2507-4bit via mlx-lm (pinned revision, ~2.3 GB downloaded
+  on first enable, ~0.5 s per rewrite); a failed or not-yet-loaded rewrite
+  falls back to pasting the raw transcript
+- New app icon: proper macOS squircle with standard margins (the old one
+  filled the full square), bolder glyph
+- Alerts, logs, and the history placeholder name the configured hotkey
+  instead of hardcoding "right Option"
+- Report a Bug… menu item: opens a Mail draft addressed to the maintainer
+  with version/mic/settings diagnostics in the body and Sotto.log attached
+  (mailto: fallback without attachment when no Mail account is configured);
+  the user reviews the draft — and the privacy warning about transcripts in
+  the log — before anything is sent
+
 ## 1.3.5 — 2026-09-01
 
 - install.sh recreates the venv when it was built by a pre-3.13 Python, so an

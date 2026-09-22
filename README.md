@@ -32,11 +32,19 @@ model download.
 - **Recording indicator** — floating pill with a live mic level animation,
   normalized against ambient noise so only speech moves the bars
 - **Hands-free mode** — double-tap the hotkey to lock recording, tap to stop
+- **Pick your hotkey** — 🎙 → Hotkey: right Option (default), right Command,
+  right Control, or right Shift; saved across launches
+- **Optional rewrite** — 🎙 → Rewrite runs the transcript through a local
+  Qwen3-4B before pasting: *Clean up* strips filler words and false starts,
+  *Bullet points* turns rambles into notes — both on-device, ~0.5 s extra
 - **History** — every transcript saved locally; browse in 🎙 → History…,
   or click a recent one in the menu to copy it
 - **Self-diagnosing** — every dictation logs its mic, duration, signal level,
   latency, and transcript to `~/Library/Logs/Sotto.log`
-- **Small** — one Python file, four dependencies, no config files
+- **Report a bug** — 🎙 → Report a Bug… opens a pre-filled email draft with
+  version/mic/settings diagnostics and the log attached; nothing is sent
+  until you review and hit send
+- **Small** — one Python file, five dependencies, one JSON settings file
 
 ## Install
 
@@ -93,6 +101,14 @@ level while recording.
 **Hands-free** — double-tap <kbd>⌥ right Option</kbd> to lock recording on,
 speak as long as you like, then tap once to stop and paste.
 
+**Rewrite** (off by default) — 🎙 → Rewrite → *Clean up* removes filler words
+(um, uh, like, you know), false starts, and repeated words, and fixes
+punctuation — your wording stays intact. *Bullet points* turns a dictated
+ramble into a tidy list. Rewriting runs a second on-device model
+(Qwen3-4B-Instruct, ~2.3 GB downloaded the first time you switch it on) and
+adds roughly half a second before the paste. If the model isn't loaded yet,
+the raw transcript is pasted and the log says so.
+
 ## FAQ
 
 **Where do I see everything I've dictated?**
@@ -126,10 +142,14 @@ race that can paste stale content into slow apps (see
 [DESIGN.md](DESIGN.md)). Note that clipboard managers will record every
 dictation.
 
-**Can I change the hotkey or the model?**
-Both are constants at the top of `sotto.py`; re-run `./install.sh` after
-editing. Smaller models (e.g. `mlx-community/whisper-small-mlx`) trade
-accuracy for speed and memory.
+**Can I change the hotkey?**
+🎙 → Hotkey. Only right-side modifier keys are offered: the left ones are
+needed for typing special characters and app shortcuts.
+
+**Can I change the model?**
+The Whisper and rewrite models are constants at the top of `sotto.py`; re-run
+`./install.sh` after editing. Smaller models (e.g.
+`mlx-community/whisper-small-mlx`) trade accuracy for speed and memory.
 
 ## Architecture
 
@@ -141,7 +161,8 @@ flowchart LR
     R --> Q[["audio queue"]]
     Q --> W["Worker thread"]
     W --> T["mlx-whisper — large-v3-turbo on the Apple GPU"]
-    T --> P["Clipboard + synthetic Cmd+V"]
+    T --> RW["optional rewrite — Qwen3-4B via mlx-lm"]
+    RW --> P["Clipboard + synthetic Cmd+V"]
     P --> A["Focused app"]
     T --> H[("history.jsonl")]
     H --> V["History window"]
@@ -158,8 +179,8 @@ Audio is captured only while the hotkey is held, processed in memory, and
 never written to disk or sent anywhere. The transcript goes to the clipboard,
 the local log file, and the local history file
 (`~/Library/Application Support/Sotto/history.jsonl`) — delete either any
-time. The model is fetched once from Hugging Face; nothing else touches the
-network.
+time. Rewriting, when enabled, also runs entirely on-device. The models are
+fetched once from Hugging Face; nothing else touches the network.
 
 ## Development
 
@@ -183,6 +204,7 @@ The cached model lives in `~/.cache/huggingface` if you want that gone too.
 ## Acknowledgments
 
 Built on [mlx-whisper](https://github.com/ml-explore/mlx-examples),
+[mlx-lm](https://github.com/ml-explore/mlx-lm),
 [sounddevice](https://github.com/spatialaudio/python-sounddevice), and
 [PyObjC](https://github.com/ronaldoussoren/pyobjc). Interaction model
 inspired by [Wispr Flow](https://wisprflow.ai).
