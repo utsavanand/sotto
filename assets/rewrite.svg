@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 250" font-family="-apple-system, 'Segoe UI', Roboto, sans-serif">
+  <!-- what you say -->
+  <g>
+    <rect x="10" y="15" width="360" height="220" rx="14" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="30" y="45" font-size="13" fill="#57606a">you say</text>
+    <text x="30" y="78" font-size="15" fill="#24292f" font-style="italic">“<tspan fill="#9aa0a8">um so basically</tspan> we should,</text>
+    <text x="30" y="102" font-size="15" fill="#24292f" font-style="italic"><tspan fill="#9aa0a8">uh,</tspan> we should move the launch</text>
+    <text x="30" y="126" font-size="15" fill="#24292f" font-style="italic">to <tspan fill="#9aa0a8">like</tspan> next Thursday because</text>
+    <text x="30" y="150" font-size="15" fill="#24292f" font-style="italic"><tspan fill="#9aa0a8">you know</tspan> QA is still, <tspan fill="#9aa0a8">um,</tspan> still</text>
+    <text x="30" y="174" font-size="15" fill="#24292f" font-style="italic">working through the payment</text>
+    <text x="30" y="198" font-size="15" fill="#24292f" font-style="italic">bugs”</text>
+  </g>
+
+  <text x="392" y="80" font-size="24" fill="#8b949e">→</text>
+  <text x="392" y="185" font-size="24" fill="#8b949e">→</text>
+
+  <!-- clean up -->
+  <g>
+    <rect x="425" y="15" width="465" height="103" rx="14" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="445" y="45" font-size="13" fill="#7aa2f7" font-weight="600">Clean up</text>
+    <text x="445" y="75" font-size="15" fill="#24292f">We should move the launch to next Thursday</text>
+    <text x="445" y="99" font-size="15" fill="#24292f">because QA is still working through the payment bugs.</text>
+  </g>
+
+  <!-- bullet points -->
+  <g>
+    <rect x="425" y="132" width="465" height="103" rx="14" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="445" y="162" font-size="13" fill="#7aa2f7" font-weight="600">Bullet points</text>
+    <text x="445" y="192" font-size="15" fill="#24292f">•  Move the launch to next Thursday</text>
+    <text x="445" y="216" font-size="15" fill="#24292f">•  QA is still working through the payment bugs</text>
+  </g>
+</svg>
