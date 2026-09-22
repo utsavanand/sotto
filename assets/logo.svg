@@ -1,29 +1,52 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#252a41"/>
-      <stop offset="1" stop-color="#13131b"/>
+      <stop offset="0" stop-color="#2b3154"/>
+      <stop offset="1" stop-color="#141726"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.6">
-      <stop offset="0" stop-color="#7aa2f7" stop-opacity="0.22"/>
+    <radialGradient id="glow" cx="0.5" cy="0.4" r="0.62">
+      <stop offset="0" stop-color="#7aa2f7" stop-opacity="0.20"/>
       <stop offset="1" stop-color="#7aa2f7" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="mic" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#d6d9e8"/>
+      <stop offset="1" stop-color="#dfe4f5"/>
     </linearGradient>
   </defs>
   <!-- macOS icon grid: 824px squircle centered on a 1024px canvas -->
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#glow)"/>
-  <!-- mic capsule -->
-  <rect x="427" y="212" width="170" height="320" rx="85" fill="url(#mic)"/>
-  <!-- pickup arc -->
-  <path d="M 332 532 a 180 180 0 0 0 360 0" stroke="#7aa2f7" stroke-width="46"
-        fill="none" stroke-linecap="round"/>
-  <!-- stem and base -->
-  <line x1="512" y1="712" x2="512" y2="770" stroke="#e8e8f0" stroke-width="46"
-        stroke-linecap="round"/>
-  <line x1="402" y1="813" x2="622" y2="813" stroke="#e8e8f0" stroke-width="46"
-        stroke-linecap="round"/>
+
+  <!-- whisper waves, behind the bubble so nothing clips -->
+  <g stroke="#7aa2f7" fill="none" stroke-linecap="round">
+    <path d="M752 456 a50 50 0 0 1 0 76" stroke-width="26"/>
+    <path d="M816 420 a98 98 0 0 1 0 148" stroke-width="26" opacity="0.5"/>
+  </g>
+
+  <!-- speech bubble that is also a face: a quiet little voice -->
+  <path d="M474 232
+           h 48
+           c 124 0 214 88 214 200
+           v 84
+           c 0 112 -90 200 -214 200
+           h -18
+           l 4 78
+           c 1 26 -28 38 -45 19
+           l -86 -97
+           h -3
+           c -104 -18 -176 -100 -176 -200
+           v -84
+           c 0 -112 90 -200 214 -200 z"
+        fill="url(#body)"/>
+
+  <!-- closed, contented eyes -->
+  <path d="M386 470 a44 44 0 0 1 78 0" stroke="#2b3154" stroke-width="28" fill="none" stroke-linecap="round"/>
+  <path d="M530 470 a44 44 0 0 1 78 0" stroke="#2b3154" stroke-width="28" fill="none" stroke-linecap="round"/>
+
+  <!-- small soft smile -->
+  <path d="M458 556 a40 34 0 0 0 78 0" stroke="#2b3154" stroke-width="24" fill="none" stroke-linecap="round"/>
+
+  <!-- blush -->
+  <ellipse cx="352" cy="540" rx="32" ry="20" fill="#ff8fa3" opacity="0.5"/>
+  <ellipse cx="642" cy="540" rx="32" ry="20" fill="#ff8fa3" opacity="0.5"/>
 </svg>
