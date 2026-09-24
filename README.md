@@ -27,6 +27,8 @@ telemetry.
 - **Recording pill** — floating mic-level indicator with an elapsed timer,
   then live progress ("Transcribing…", "Rewriting…", "Pasted") so you always
   know what it's doing
+- **Dictionary** — list your names, products, and jargon; Whisper stops
+  guessing "Soto" for "Sotto"
 - **On-device** — audio never leaves the machine; works offline
 - **Small** — one Python file, five dependencies
 
@@ -38,6 +40,7 @@ log, and one-click bug reports:
 <img src="assets/menu.svg" width="640" alt="Sotto menu: transcripts, Hotkey and Rewrite submenus, Settings, History, Open Log, Report a Bug">
 
 - **Settings…** — a real window (⌘,) for hotkey and rewrite mode
+- **Edit Dictionary…** — names and jargon Whisper should spell your way
 - **Hotkey** — right Option (default), right Command, right Control, or right
   Shift. Right-side only: the left keys are needed for typing.
 - **Report a Bug…** — opens a pre-filled Mail draft with diagnostics and the

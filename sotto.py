@@ -167,8 +167,24 @@ LOG_PATH = os.path.expanduser("~/Library/Logs/Sotto.log")
 SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
 SETTINGS_PATH = os.path.join(SUPPORT_DIR, "settings.json")
+DICTIONARY_PATH = os.path.join(SUPPORT_DIR, "dictionary.txt")
+# Whisper's decoder context is 224 tokens; anything past that is silently
+# dropped, and a bloated glossary dilutes the bias on the words you do say.
+DICTIONARY_MAX_TERMS = 120
+DICTIONARY_TEMPLATE = """\
+# Sotto dictionary — one term per line.
+#
+# Whisper picks the likeliest spelling when audio is ambiguous, so listing
+# your names, products, and jargon here biases it toward yours. Lines
+# starting with # are ignored. Edits apply to the next dictation; no
+# restart needed.
+#
+# Sotto
+# Duckterm
+# Kubernetes
+"""
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.6.2"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.7.0"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -244,6 +260,44 @@ def save_settings():
             json.dump(settings, f)
     except OSError as e:
         log(f"could not save settings: {e}")
+
+
+def read_dictionary():
+    """Terms the user wants spelled their way. Re-read per dictation — the
+    file is tiny, and edits should not need a relaunch."""
+    try:
+        with open(DICTIONARY_PATH) as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    terms = []
+    for line in lines:
+        term = line.strip()
+        if term and not term.startswith("#"):
+            terms.append(term)
+    if len(terms) > DICTIONARY_MAX_TERMS:
+        log(
+            f"dictionary has {len(terms)} terms; using the first "
+            f"{DICTIONARY_MAX_TERMS} (Whisper's prompt window is 224 tokens)"
+        )
+        terms = terms[:DICTIONARY_MAX_TERMS]
+    return terms
+
+
+def dictionary_prompt(terms):
+    """Whisper conditions on this text, so it reads as a sentence rather than
+    a bare list — a list of nouns biases it toward transcribing lists."""
+    return "Glossary of terms used in this recording: " + ", ".join(terms) + "."
+
+
+def ensure_dictionary_file():
+    if os.path.exists(DICTIONARY_PATH):
+        return
+    try:
+        with open(DICTIONARY_PATH, "w", opener=_private_opener) as f:
+            f.write(DICTIONARY_TEMPLATE)
+    except OSError as e:
+        log(f"could not create the dictionary file: {e}")
 
 
 def append_history(text):
@@ -462,8 +516,18 @@ def install_hotkey_monitors():
 model_path = None  # local snapshot dir of the pinned revision, set by backend
 
 
-def transcribe(audio):
-    return mlx_whisper.transcribe(audio, path_or_hf_repo=model_path)["text"].strip()
+def transcribe(audio, use_dictionary=True):
+    terms = read_dictionary() if use_dictionary else []
+    return mlx_whisper.transcribe(
+        audio,
+        path_or_hf_repo=model_path,
+        # Whisper normally feeds each 30 s window's output forward as context
+        # for the next one. That compounds errors on long dictation: one bad
+        # guess becomes the context that produces the next. The glossary gives
+        # every window the same bias instead, without the feedback loop.
+        condition_on_previous_text=False,
+        initial_prompt=dictionary_prompt(terms) if terms else None,
+    )["text"].strip()
 
 
 def ensure_rewriter():
@@ -575,7 +639,7 @@ def backend():
         model_path = huggingface_hub.snapshot_download(MODEL_REPO, revision=MODEL_REVISION)
         # Warmup on silence: pays model load + Metal kernel compilation now
         # instead of on the first real dictation
-        transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32))
+        transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), use_dictionary=False)
         log(f"model ready in {time.monotonic() - t0:.1f}s — hold {hotkey_label()} to dictate")
         state = "ready"
         threading.Thread(target=worker, daemon=True).start()
@@ -920,16 +984,16 @@ class SettingsWindow(AppKit.NSObject):
             | AppKit.NSWindowStyleMaskMiniaturizable
         )
         window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            ((0, 0), (460, 322)), mask, AppKit.NSBackingStoreBuffered, False
+            ((0, 0), (460, 366)), mask, AppKit.NSBackingStoreBuffered, False
         )
         window.setTitle_("Sotto Settings")
         window.setReleasedWhenClosed_(False)
         window.center()
         content = window.contentView()
 
-        content.addSubview_(make_label("Hotkey", 24, 274, 13, bold=True))
+        content.addSubview_(make_label("Hotkey", 24, 318, 13, bold=True))
         self.hotkey_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            ((24, 242), (412, 26)), False
+            ((24, 286), (412, 26)), False
         )
         for name, (_, _, label) in HOTKEYS.items():
             self.hotkey_popup.addItemWithTitle_(label)
@@ -938,12 +1002,12 @@ class SettingsWindow(AppKit.NSObject):
         self.hotkey_popup.setAction_("hotkeyChanged:")
         content.addSubview_(self.hotkey_popup)
         content.addSubview_(
-            make_label("Hold to dictate. Right-side keys only.", 24, 220, 11, dim=True)
+            make_label("Hold to dictate. Right-side keys only.", 24, 264, 11, dim=True)
         )
 
-        content.addSubview_(make_label("Rewrite", 24, 180, 13, bold=True))
+        content.addSubview_(make_label("Rewrite", 24, 224, 13, bold=True))
         self.rewrite_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            ((24, 148), (412, 26)), False
+            ((24, 192), (412, 26)), False
         )
         for mode, label in REWRITE_MODES.items():
             self.rewrite_popup.addItemWithTitle_(label)
@@ -952,16 +1016,28 @@ class SettingsWindow(AppKit.NSObject):
         self.rewrite_popup.setAction_("rewriteChanged:")
         content.addSubview_(self.rewrite_popup)
 
-        self.hint = make_label("", 24, 104, 11, dim=True)
-        self.hint.setFrame_(((24, 96), (412, 44)))
+        self.hint = make_label("", 24, 148, 11, dim=True)
+        self.hint.setFrame_(((24, 140), (412, 44)))
         # Hints run two lines for the longer modes
         self.hint.cell().setWraps_(True)
         content.addSubview_(self.hint)
 
-        self.status = make_label("", 24, 52, 11, dim=True)
-        self.status.setFrame_(((24, 44), (412, 34)))
+        self.status = make_label("", 24, 96, 11, dim=True)
+        self.status.setFrame_(((24, 88), (412, 34)))
         self.status.cell().setWraps_(True)
         content.addSubview_(self.status)
+
+        self.dict_button = AppKit.NSButton.alloc().initWithFrame_(((24, 48), (200, 26)))
+        self.dict_button.setTitle_("Edit Dictionary…")
+        self.dict_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        self.dict_button.setTarget_(self)
+        self.dict_button.setAction_("openDictionary:")
+        content.addSubview_(self.dict_button)
+        content.addSubview_(
+            make_label(
+                "Names and jargon Whisper should spell your way.", 232, 52, 11, dim=True
+            )
+        )
 
         self.notice = make_label("", 24, 16, 11, dim=True)
         self.notice.setFrame_(((24, 8), (412, 30)))
@@ -1000,6 +1076,10 @@ class SettingsWindow(AppKit.NSObject):
                 f"Loading the rewrite model ({REWRITE_SIZE_LABEL} on first use). "
                 "Dictations paste unrewritten until it is ready."
             )
+
+    def openDictionary_(self, _sender):
+        ensure_dictionary_file()
+        subprocess.run(["open", "-t", DICTIONARY_PATH], check=False)
 
     def hotkeyChanged_(self, sender):
         settings["hotkey"] = sender.selectedItem().representedObject()
@@ -1140,6 +1220,7 @@ def install_app_menu():
     app_menu = AppKit.NSMenu.alloc().initWithTitle_("Sotto")
     for title, action, key in (
         ("Settings…", "showSettings:", ","),
+        ("Edit Dictionary…", "editDictionary:", ""),
         ("History…", "showHistory:", "h"),
         ("Report a Bug…", "reportBug:", ""),
         (None, None, None),
@@ -1234,6 +1315,7 @@ class StatusItem(AppKit.NSObject):
         )
         actions = (
             ("Settings…", "showSettings:", ","),
+            ("Edit Dictionary…", "editDictionary:", ""),
             ("History…", "showHistory:", "h"),
             ("Open Log", "openLog:", ""),
             ("Report a Bug…", "reportBug:", ""),
@@ -1273,6 +1355,10 @@ class StatusItem(AppKit.NSObject):
 
     def openLog_(self, _sender):
         subprocess.run(["open", LOG_PATH], check=False)
+
+    def editDictionary_(self, _sender):
+        ensure_dictionary_file()
+        subprocess.run(["open", "-t", DICTIONARY_PATH], check=False)
 
     def reportBug_(self, _sender):
         body = (
@@ -1344,6 +1430,7 @@ def install_status_item():
 def main():
     global overlay, history_win, settings_win, status_item
     os.makedirs(SUPPORT_DIR, exist_ok=True)
+    ensure_dictionary_file()
     # Migrate transcript files created by older versions to private mode;
     # _private_opener only covers newly created files
     for path in (LOG_PATH, HISTORY_PATH):

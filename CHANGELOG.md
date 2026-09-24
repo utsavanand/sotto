@@ -1,4 +1,18 @@
 # Changelog
+## 1.7.0 — 2026-09-24
+
+- Custom dictionary: list proper nouns and jargon in
+  `~/Library/Application Support/Sotto/dictionary.txt` (Edit Dictionary… in
+  the menu or Settings) and Whisper is biased toward your spellings via
+  initial_prompt. Measured on synthesized speech: "Soto" and "duct term"
+  became "Sotto" and "Duckterm". Re-read per dictation, so edits need no
+  relaunch; capped at 120 terms since Whisper's prompt window is 224 tokens.
+- Long dictations no longer drift. Whisper fed each 30 s window's output
+  forward as the next window's context, so one bad guess compounded through
+  the rest of a long recording. That carryover is now off
+  (condition_on_previous_text=False); the dictionary supplies cross-window
+  consistency instead, without the feedback loop.
+
 ## 1.6.2 — 2026-09-24
 
 - Caveman mode drops its bullets and line breaks, writing one line with
