@@ -24,7 +24,9 @@ telemetry.
 - **Fast** — under 1.5 s from key-release to text (0.5 s typical on an M4 Max),
   with Whisper large-v3-turbo accuracy
 - **Hands-free** — double-tap the hotkey to lock recording, tap to stop
-- **Recording pill** — floating mic-level indicator; only speech moves the bars
+- **Recording pill** — floating mic-level indicator with an elapsed timer,
+  then live progress ("Transcribing…", "Rewriting…", "Pasted") so you always
+  know what it's doing
 - **On-device** — audio never leaves the machine; works offline
 - **Small** — one Python file, five dependencies
 

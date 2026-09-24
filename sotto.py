@@ -78,12 +78,13 @@ MIN_SECONDS = 0.3
 TAP_MAX_SECONDS = 0.35  # a press shorter than this counts as a tap
 DOUBLE_TAP_SECONDS = 0.5  # two taps within this window lock hands-free mode
 HISTORY_SIZE = 10
+LONG_RECORDING_SECONDS = 60  # elapsed counter turns amber past this
 LOG_PATH = os.path.expanduser("~/Library/Logs/Sotto.log")
 SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
 SETTINGS_PATH = os.path.join(SUPPORT_DIR, "settings.json")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.4.0"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.4.1"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -286,7 +287,9 @@ def stop_recording():
     if state != "recording":
         return
     state = "ready"
-    overlay.hide()
+    # The pill stays up: the worker switches it to "Transcribing…" and hides
+    # it when the paste lands. _finish_recording hides it for dropped audio.
+    overlay.setPhase_("transcribing")
     s, buf = stream, record_buf
     stream = None
     record_buf = None
@@ -301,11 +304,13 @@ def _finish_recording(s, buf):
             log("audio device was slow to release — another audio app may be fighting for the mic")
     if not buf:
         log("dropped: no audio captured")
+        AppHelper.callAfter(overlay.hide)
         return
     audio = np.concatenate(buf)[:, 0]
     secs = len(audio) / SAMPLE_RATE
     if secs < MIN_SECONDS:
         log(f"dropped: {secs:.2f}s is under the {MIN_SECONDS}s minimum")
+        AppHelper.callAfter(overlay.hide)
         return
     peak = float(np.abs(audio).max())
     if peak < 1e-6:
@@ -313,6 +318,7 @@ def _finish_recording(s, buf):
             f"dropped: {secs:.1f}s of pure silence — macOS delivered no mic signal "
             "(check System Settings > Privacy & Security > Microphone)"
         )
+        AppHelper.callAfter(overlay.hide)
         return
     log(f"recorded {secs:.1f}s on '{input_name}' (peak {peak:.3f}), transcribing...")
     jobs.put(audio)
@@ -450,12 +456,17 @@ def worker():
             text = transcribe(audio)
             mode = settings["rewrite"]
             if text and mode != "off":
+                AppHelper.callAfter(overlay.setPhase_, "rewriting")
                 text = rewrite(text, mode) or text
             if text:
                 paste(text)
                 append_history(text)
+                AppHelper.callAfter(overlay.finish)
+            else:
+                AppHelper.callAfter(overlay.hide)
             log(f"[{time.monotonic() - t0:.2f}s] {text or '(empty transcription, nothing pasted)'}")
         except Exception as e:  # noqa: BLE001
+            AppHelper.callAfter(overlay.hide)
             log(f"transcription failed: {e!r} — dictation continues")
 
 
@@ -541,28 +552,96 @@ def status_item_onscreen():
     return None
 
 
-OVERLAY_SIZE = (176, 36)
-BAR_COUNT = 24
+OVERLAY_SIZE = (196, 36)
+BAR_COUNT = 22
+# Labels for the phases that run after the key is released. Without these the
+# pill vanished on release and multi-second transcribe+rewrite work looked
+# like nothing was happening.
+PHASE_LABELS = {
+    "transcribing": "Transcribing…",
+    "rewriting": "Rewriting…",
+    "done": "Pasted",
+}
 
 
 class LevelView(AppKit.NSView):
     def drawRect_(self, _rect):
         bounds = self.bounds()
         mid = bounds.size.height / 2
-        # Record dot, gently pulsing
-        pulse = 0.55 + 0.45 * abs(np.sin(getattr(self, "ticks", 0) * 0.18))
-        AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.27, 0.23, pulse).setFill()
-        AppKit.NSBezierPath.bezierPathWithOvalInRect_(((14, mid - 4), (8, 8))).fill()
-        # Waveform: flat dotted line at rest, bars rise only on speech
-        levels = getattr(self, "levels", [])
-        AppKit.NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.9).setFill()
-        for i in range(BAR_COUNT):
-            lvl = levels[i] if i < len(levels) else 0.0
-            h = 2.5 + lvl * 20
-            bar = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                ((32 + i * 5.5, mid - h / 2), (3, h)), 1.5, 1.5
-            )
-            bar.fill()
+        ticks = getattr(self, "ticks", 0)
+        phase = getattr(self, "phase", "recording")
+        if phase == "recording":
+            # Record dot, gently pulsing
+            pulse = 0.55 + 0.45 * abs(np.sin(ticks * 0.18))
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                1.0, 0.27, 0.23, pulse
+            ).setFill()
+            AppKit.NSBezierPath.bezierPathWithOvalInRect_(((14, mid - 4), (8, 8))).fill()
+            # Waveform: flat dotted line at rest, bars rise only on speech
+            levels = getattr(self, "levels", [])
+            AppKit.NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.9).setFill()
+            for i in range(BAR_COUNT):
+                lvl = levels[i] if i < len(levels) else 0.0
+                h = 2.5 + lvl * 20
+                bar = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                    ((30 + i * 4.6, mid - h / 2), (3, h)), 1.5, 1.5
+                )
+                bar.fill()
+            draw_elapsed(self, bounds)
+            return
+        draw_phase(phase, ticks, bounds)
+
+
+# Module-level, not LevelView methods: PyObjC maps every method on an NSObject
+# subclass to an ObjC selector, and these arities have no valid selector name
+def draw_elapsed(view, bounds):
+    started = getattr(view, "started", None)
+    if started is None:
+        return
+    secs = int(time.monotonic() - started)
+    # Amber past the soft limit: a nudge to wrap up, not a hard stop —
+    # Whisper's accuracy holds, but very long holds are usually accidental
+    color = (
+        AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.72, 0.30, 0.95)
+        if secs >= LONG_RECORDING_SECONDS
+        else AppKit.NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.65)
+    )
+    label = f"{secs // 60}:{secs % 60:02d}"
+    attrs = {
+        AppKit.NSFontAttributeName: AppKit.NSFont.monospacedDigitSystemFontOfSize_weight_(
+            11, AppKit.NSFontWeightMedium
+        ),
+        AppKit.NSForegroundColorAttributeName: color,
+    }
+    text = AppKit.NSAttributedString.alloc().initWithString_attributes_(label, attrs)
+    size = text.size()
+    text.drawAtPoint_(
+        (bounds.size.width - size.width - 12, (bounds.size.height - size.height) / 2)
+    )
+
+
+def draw_phase(phase, ticks, bounds):
+    # Three dots cycling left-to-right: cheap to draw, reads as "working"
+    # without a spinner's implication of a known duration
+    for i in range(3):
+        alpha = 0.9 if phase == "done" else 0.25 + 0.65 * (
+            0.5 + 0.5 * np.sin(ticks * 0.28 - i * 0.9)
+        )
+        AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.48, 0.64, 0.97, alpha).setFill()
+        AppKit.NSBezierPath.bezierPathWithOvalInRect_(
+            ((14 + i * 11, bounds.size.height / 2 - 3), (6, 6))
+        ).fill()
+    attrs = {
+        AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(12),
+        AppKit.NSForegroundColorAttributeName: AppKit.NSColor.colorWithCalibratedWhite_alpha_(
+            1.0, 0.92
+        ),
+    }
+    text = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+        PHASE_LABELS.get(phase, ""), attrs
+    )
+    size = text.size()
+    text.drawAtPoint_((52, (bounds.size.height - size.height) / 2))
 
 
 class Overlay(AppKit.NSObject):
@@ -603,12 +682,44 @@ class Overlay(AppKit.NSObject):
         x = screen.origin.x + (screen.size.width - w) / 2
         self.panel.setFrame_display_(((x, screen.origin.y + 110), (w, h)), True)
         self.view.levels = []
+        self.view.phase = "recording"
+        self.view.started = time.monotonic()
         self.rms_history = collections.deque(maxlen=30)
         self.displayed = 0.0
         self.panel.orderFrontRegardless()
+        self.startTimer()
+
+    def startTimer(self):
+        if self.timer:
+            self.timer.invalidate()
         self.timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.07, self, "tick:", None, True
         )
+
+    def setPhase_(self, phase):
+        """Switch the pill to a post-release phase, reviving it if hidden.
+
+        Called from the worker thread via AppHelper.callAfter, so it must
+        tolerate arriving after hide() — a fast dictation can finish before
+        the phase change is delivered.
+        """
+        self.view.phase = phase
+        self.view.setNeedsDisplay_(True)
+        if not self.panel.isVisible():
+            self.panel.orderFrontRegardless()
+        if not self.timer:
+            self.startTimer()
+
+    def finish(self):
+        """Flash 'Pasted' briefly, then hide — a silent disappearance makes a
+        failed dictation and a successful one look identical."""
+        self.setPhase_("done")
+        AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            0.45, self, "hideTimer:", None, False
+        )
+
+    def hideTimer_(self, _timer):
+        self.hide()
 
     def hide(self):
         if self.timer:
@@ -617,6 +728,10 @@ class Overlay(AppKit.NSObject):
         self.panel.orderOut_(None)
 
     def tick_(self, _timer):
+        if getattr(self.view, "phase", "recording") != "recording":
+            self.view.ticks = getattr(self.view, "ticks", 0) + 1
+            self.view.setNeedsDisplay_(True)
+            return
         rms = 0.0
         buf = record_buf
         if buf:

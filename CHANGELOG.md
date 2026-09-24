@@ -1,4 +1,13 @@
 # Changelog
+## 1.4.1 — 2026-09-23
+
+- The recording pill no longer vanishes on key release: it stays up through
+  "Transcribing…" and "Rewriting…" (animated dots), then flashes "Pasted"
+  before hiding, so multi-second work is visible instead of looking idle.
+  Dropped recordings (too short, silent, no audio) hide it immediately.
+- Elapsed timer on the pill while recording, turning amber past 60 s — a
+  nudge on long holds, not a hard stop
+
 ## 1.4.0 — 2026-09-21
 
 - Hotkey is now chosen from the menu bar (🎙 → Hotkey): right Option
