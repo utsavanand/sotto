@@ -160,7 +160,7 @@ SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
 SETTINGS_PATH = os.path.join(SUPPORT_DIR, "settings.json")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.6.0"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.6.1"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -1085,6 +1085,21 @@ def show_dock_icon():
     install_app_menu()
 
 
+def set_process_name():
+    """Make the app menu say "Sotto", not "Python".
+
+    macOS titles the app menu from the running executable's bundle — here
+    Homebrew's Python.app — so it must be overridden in that bundle's info
+    dictionary before the menu is built.
+    """
+    try:
+        bundle = AppKit.NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        info["CFBundleName"] = "Sotto"
+    except Exception as e:  # noqa: BLE001
+        log(f"could not set the app menu name: {e!r}")
+
+
 def apply_app_icon():
     """Set the Dock icon explicitly.
 
@@ -1109,10 +1124,12 @@ def apply_app_icon():
 def install_app_menu():
     """Minimal app menu: macOS renders an empty bar for a promoted accessory
     app otherwise, and ⌘Q would not work."""
+    set_process_name()
     main_menu = AppKit.NSMenu.alloc().init()
     app_item = AppKit.NSMenuItem.alloc().init()
     main_menu.addItem_(app_item)
-    app_menu = AppKit.NSMenu.alloc().init()
+    # The submenu's own title is what macOS renders in bold as the app menu
+    app_menu = AppKit.NSMenu.alloc().initWithTitle_("Sotto")
     for title, action, key in (
         ("Settings…", "showSettings:", ","),
         ("History…", "showHistory:", "h"),
@@ -1326,6 +1343,9 @@ def main():
             os.chmod(path, 0o600)
         except OSError:
             pass
+    # Before sharedApplication(): AppKit reads the bundle name once while
+    # building its menus, so a later override can arrive too late
+    set_process_name()
     app = AppKit.NSApplication.sharedApplication()
     # Accessory: menu-bar only. Without this the process inherits Python.app's
     # bundle identity and takes over the app menu as "Python".

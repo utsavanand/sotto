@@ -1,4 +1,10 @@
 # Changelog
+## 1.6.1 — 2026-09-23
+
+- The app menu says "Sotto", not "Python". macOS titles it from the running
+  executable's bundle — Homebrew's Python.app — so CFBundleName is now
+  overridden before AppKit builds its menus.
+
 ## 1.6.0 — 2026-09-23
 
 - "Bullet points" is now "Structured": instead of forcing every dictation
