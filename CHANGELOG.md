@@ -1,4 +1,12 @@
 # Changelog
+## 1.6.2 — 2026-09-24
+
+- Caveman mode drops its bullets and line breaks, writing one line with
+  "; " between asks. The markup was ~16% of the output's tokens (3 of 19
+  on a two-ask dictation) in a mode whose whole purpose is spending fewer
+  tokens. The freed budget goes to detail instead: "button overflows"
+  now survives where the bulleted version dropped it.
+
 ## 1.6.1 — 2026-09-23
 
 - The app menu says "Sotto", not "Python". macOS titles it from the running

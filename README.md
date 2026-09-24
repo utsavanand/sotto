@@ -51,8 +51,8 @@ A second on-device model (Qwen3-4B-Instruct, ~2.3 GB on first enable,
 modes: **Clean up** keeps your wording and strips filler, **Structured**
 gives the dictation the shape it needs (crisp prose, bullets for parallel
 items, numbered steps for a sequence), and **Caveman** compresses hard for
-pasting into an AI assistant — every instruction kept, the words around them
-cut.
+pasting into an AI assistant — one line, every instruction kept, the words and
+formatting around them cut.
 
 <img src="assets/rewrite.svg" width="900" alt="Rewrite example: filler-laden dictation becomes clean prose or a structured list">
 

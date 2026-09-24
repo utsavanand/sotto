@@ -140,10 +140,18 @@ REWRITE_PROMPTS = {
         "(\"I was thinking maybe we could\" becomes the bare instruction)\n"
         "- drop articles and auxiliary verbs where meaning survives without "
         "them; use fragments and imperatives freely\n"
-        "- use short bullets when there are several asks, one line otherwise\n"
         "- never drop a requirement to save words, and never invent one\n"
+        "Formatting is overhead too: write ONE line, separating asks with "
+        "\"; \". No bullets, no numbering, no line breaks, no trailing spaces "
+        "— every one of those costs tokens the model does not need.\n"
         "Aim for roughly a third of the original length. Reply with the "
-        "compressed text only.\n\nTranscript:\n{text}"
+        "compressed text only.\n\n"
+        "Example transcript:\n"
+        "hey can you um look at the login page, it's broken on mobile I think, "
+        "and maybe check the signup flow too but only if you have time\n"
+        "Example reply:\n"
+        "check login page broken on mobile; if time, check signup flow too\n\n"
+        "Transcript:\n{text}"
     ),
 }
 SAMPLE_RATE = 16_000
@@ -160,7 +168,7 @@ SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
 SETTINGS_PATH = os.path.join(SUPPORT_DIR, "settings.json")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.6.1"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.6.2"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
