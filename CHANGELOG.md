@@ -1,4 +1,18 @@
 # Changelog
+## 1.5.0 — 2026-09-23
+
+- Settings window (⌘,) for hotkey and rewrite mode. The menu bar item still
+  carries both, but macOS hides the status icon behind the notch on a full
+  menu bar — which made every setting unreachable on affected machines.
+- When the icon is hidden, Sotto now also promotes itself to a Dock app with
+  a real app menu, so there is always a way in.
+- New "Caveman" rewrite mode: compresses dictation for pasting into an AI
+  assistant, keeping every instruction, constraint, name, and number while
+  cutting hedging and filler (~⅓ the original length).
+- Bullet points no longer splits a conditional across two bullets — "do X,
+  but only if Y" stayed one bullet, instead of reading as an unconditional
+  task plus a stray fragment.
+
 ## 1.4.2 — 2026-09-23
 
 - The progress pill can no longer get stuck on screen. When CoreAudio

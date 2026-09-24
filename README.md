@@ -37,6 +37,8 @@ log, and one-click bug reports:
 
 <img src="assets/menu.svg" width="640" alt="Sotto menu: transcripts, Hotkey and Rewrite submenus, History, Open Log, Report a Bug">
 
+- **Settings…** — a real window (⌘,) for hotkey and rewrite mode, so they
+  stay reachable even when a full menu bar hides the icon behind the notch
 - **Hotkey** — right Option (default), right Command, right Control, or right
   Shift. Right-side only: the left keys are needed for typing.
 - **Report a Bug…** — opens a pre-filled Mail draft with diagnostics and the
@@ -45,7 +47,10 @@ log, and one-click bug reports:
 ## Rewrite (optional)
 
 A second on-device model (Qwen3-4B-Instruct, ~2.3 GB on first enable,
-~0.5 s per dictation) polishes the transcript before it's pasted:
+~0.5 s per dictation) polishes the transcript before it's pasted. Three
+modes: **Clean up** keeps your wording and strips filler, **Bullet points**
+turns a ramble into a list, and **Caveman** compresses hard for pasting into
+an AI assistant — every instruction kept, the words around them cut.
 
 <img src="assets/rewrite.svg" width="900" alt="Rewrite example: filler-laden dictation becomes clean prose or bullet points">
 

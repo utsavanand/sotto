@@ -48,7 +48,19 @@ MODEL_REVISION = "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
 # seconds per dictation. 4B-Instruct rewrites reliably in ~0.3-0.8s on M-series.
 REWRITE_REPO = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 REWRITE_REVISION = "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b"
-REWRITE_MODES = {"off": "Off", "clean": "Clean up", "bullets": "Bullet points"}
+REWRITE_SIZE_LABEL = "~2.3 GB"
+REWRITE_MODES = {
+    "off": "Off",
+    "clean": "Clean up",
+    "bullets": "Bullet points",
+    "caveman": "Caveman",
+}
+REWRITE_HINTS = {
+    "off": "Paste exactly what Whisper heard.",
+    "clean": "Remove filler words and fix punctuation. Your wording is kept.",
+    "bullets": "Turn a ramble into a tidy list, one bullet per idea.",
+    "caveman": "Compress hard for prompting an LLM — every instruction kept, words minimised.",
+}
 REWRITE_PROMPTS = {
     "clean": (
         "You clean up dictated speech. Rewrite the transcript below:\n"
@@ -67,10 +79,30 @@ REWRITE_PROMPTS = {
         "- one bullet per distinct idea, in the original order\n"
         "- keep every substantive detail, name, and number; drop filler words, "
         "false starts, and repetition\n"
+        "- keep a condition attached to what it qualifies: \"do X, but only if "
+        "Y\" is ONE bullet, never two — splitting it turns a conditional into "
+        "an unconditional task\n"
         "- keep the speaker's intent and wording where possible; never add "
         "information or opinions\n"
         'Start each line with "- ". Reply with the bullet points only — no '
         "title, no preamble.\n\nTranscript:\n{text}"
+    ),
+    # Caveman targets LLM prompts: an agent needs the constraints and the ask,
+    # not the social scaffolding of speech.
+    "caveman": (
+        "You compress dictated speech into the shortest text that still "
+        "carries the full meaning, for pasting into an AI assistant as a "
+        "prompt.\n"
+        "- keep every instruction, constraint, name, number, path, and "
+        "technical term EXACTLY as spoken\n"
+        "- cut all filler, hedging, politeness, and social scaffolding "
+        "(\"I was thinking maybe we could\" becomes the bare instruction)\n"
+        "- drop articles and auxiliary verbs where meaning survives without "
+        "them; use fragments and imperatives freely\n"
+        "- use short bullets when there are several asks, one line otherwise\n"
+        "- never drop a requirement to save words, and never invent one\n"
+        "Aim for roughly a third of the original length. Reply with the "
+        "compressed text only.\n\nTranscript:\n{text}"
     ),
 }
 SAMPLE_RATE = 16_000
@@ -87,7 +119,7 @@ SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
 SETTINGS_PATH = os.path.join(SUPPORT_DIR, "settings.json")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.4.2"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.5.0"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -104,6 +136,8 @@ history = collections.deque(maxlen=HISTORY_SIZE)  # (time_str, text), newest fir
 history_version = 0
 overlay = None
 history_win = None
+settings_win = None
+status_item = None  # StatusItem delegate, so windows can refresh the menu
 locked = False
 press_time = 0.0
 last_tap = 0.0
@@ -794,6 +828,135 @@ class Overlay(AppKit.NSObject):
         self.view.setNeedsDisplay_(True)
 
 
+class SettingsWindow(AppKit.NSObject):
+    """Real window for hotkey and rewrite mode.
+
+    The menu bar item carries the same settings, but it is unreachable when
+    macOS hides the status item behind the notch on a crowded menu bar — which
+    is the normal case on this machine. A window can always be opened by
+    relaunching the app.
+    """
+
+    def show(self):
+        if not getattr(self, "window", None):
+            self.buildWindow()
+        self.syncControls()
+        AppKit.NSApp.activateIgnoringOtherApps_(True)
+        self.window.makeKeyAndOrderFront_(None)
+
+    def buildWindow(self):
+        mask = (
+            AppKit.NSWindowStyleMaskTitled
+            | AppKit.NSWindowStyleMaskClosable
+            | AppKit.NSWindowStyleMaskMiniaturizable
+        )
+        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            ((0, 0), (460, 322)), mask, AppKit.NSBackingStoreBuffered, False
+        )
+        window.setTitle_("Sotto Settings")
+        window.setReleasedWhenClosed_(False)
+        window.center()
+        content = window.contentView()
+
+        content.addSubview_(make_label("Hotkey", 24, 274, 13, bold=True))
+        self.hotkey_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            ((24, 242), (412, 26)), False
+        )
+        for name, (_, _, label) in HOTKEYS.items():
+            self.hotkey_popup.addItemWithTitle_(label)
+            self.hotkey_popup.lastItem().setRepresentedObject_(name)
+        self.hotkey_popup.setTarget_(self)
+        self.hotkey_popup.setAction_("hotkeyChanged:")
+        content.addSubview_(self.hotkey_popup)
+        content.addSubview_(
+            make_label("Hold to dictate. Right-side keys only.", 24, 220, 11, dim=True)
+        )
+
+        content.addSubview_(make_label("Rewrite", 24, 180, 13, bold=True))
+        self.rewrite_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            ((24, 148), (412, 26)), False
+        )
+        for mode, label in REWRITE_MODES.items():
+            self.rewrite_popup.addItemWithTitle_(label)
+            self.rewrite_popup.lastItem().setRepresentedObject_(mode)
+        self.rewrite_popup.setTarget_(self)
+        self.rewrite_popup.setAction_("rewriteChanged:")
+        content.addSubview_(self.rewrite_popup)
+
+        self.hint = make_label("", 24, 104, 11, dim=True)
+        self.hint.setFrame_(((24, 96), (412, 44)))
+        # Hints run two lines for the longer modes
+        self.hint.cell().setWraps_(True)
+        content.addSubview_(self.hint)
+
+        self.status = make_label("", 24, 52, 11, dim=True)
+        self.status.setFrame_(((24, 44), (412, 34)))
+        self.status.cell().setWraps_(True)
+        content.addSubview_(self.status)
+
+        content.addSubview_(
+            make_label(
+                "Everything runs on this Mac. Audio never leaves the device.",
+                24, 16, 11, dim=True,
+            )
+        )
+        self.window = window
+
+    def syncControls(self):
+        for i in range(self.hotkey_popup.numberOfItems()):
+            if self.hotkey_popup.itemAtIndex_(i).representedObject() == settings["hotkey"]:
+                self.hotkey_popup.selectItemAtIndex_(i)
+        for i in range(self.rewrite_popup.numberOfItems()):
+            if self.rewrite_popup.itemAtIndex_(i).representedObject() == settings["rewrite"]:
+                self.rewrite_popup.selectItemAtIndex_(i)
+        self.refreshHint()
+
+    def refreshHint(self):
+        mode = settings["rewrite"]
+        self.hint.setStringValue_(REWRITE_HINTS.get(mode, ""))
+        if mode == "off":
+            self.status.setStringValue_("")
+        elif rewriter is not None:
+            self.status.setStringValue_(f"Rewrite model loaded ({REWRITE_SIZE_LABEL}).")
+        else:
+            self.status.setStringValue_(
+                f"Loading the rewrite model ({REWRITE_SIZE_LABEL} on first use). "
+                "Dictations paste unrewritten until it is ready."
+            )
+
+    def hotkeyChanged_(self, sender):
+        settings["hotkey"] = sender.selectedItem().representedObject()
+        save_settings()
+        log(f"hotkey: {hotkey_label()}")
+        rebuild_status_menu()
+
+    def rewriteChanged_(self, sender):
+        settings["rewrite"] = sender.selectedItem().representedObject()
+        save_settings()
+        if settings["rewrite"] != "off":
+            ensure_rewriter()
+        self.refreshHint()
+        rebuild_status_menu()
+
+
+def make_label(text, x, y, size, bold=False, dim=False):
+    field = AppKit.NSTextField.alloc().initWithFrame_(((x, y), (412, 18)))
+    field.setStringValue_(text)
+    field.setBezeled_(False)
+    field.setDrawsBackground_(False)
+    field.setEditable_(False)
+    field.setSelectable_(False)
+    font = (
+        AppKit.NSFont.boldSystemFontOfSize_(size)
+        if bold
+        else AppKit.NSFont.systemFontOfSize_(size)
+    )
+    field.setFont_(font)
+    if dim:
+        field.setTextColor_(AppKit.NSColor.secondaryLabelColor())
+    return field
+
+
 class HistoryWindow(AppKit.NSObject):
     """Scrollable read-only window with every transcription ever made."""
 
@@ -845,6 +1008,44 @@ class HistoryWindow(AppKit.NSObject):
 # Module-level, not a StatusItem method: PyObjC maps method names to ObjC
 # selectors, and a 4-argument method without matching underscores is rejected
 # at class creation with BadPrototypeError
+def show_dock_icon():
+    """Promote the accessory app to a regular one, giving it a Dock icon and
+    an app menu — the only reachable UI when the status item is hidden."""
+    AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
+    install_app_menu()
+
+
+def install_app_menu():
+    """Minimal app menu: macOS renders an empty bar for a promoted accessory
+    app otherwise, and ⌘Q would not work."""
+    main_menu = AppKit.NSMenu.alloc().init()
+    app_item = AppKit.NSMenuItem.alloc().init()
+    main_menu.addItem_(app_item)
+    app_menu = AppKit.NSMenu.alloc().init()
+    for title, action, key in (
+        ("Settings…", "showSettings:", ","),
+        ("History…", "showHistory:", "h"),
+        ("Report a Bug…", "reportBug:", ""),
+        (None, None, None),
+        ("Quit Sotto", "terminate:", "q"),
+    ):
+        if title is None:
+            app_menu.addItem_(AppKit.NSMenuItem.separatorItem())
+            continue
+        item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, key)
+        if action != "terminate:":
+            item.setTarget_(status_item)
+        app_menu.addItem_(item)
+    app_item.setSubmenu_(app_menu)
+    AppKit.NSApp.setMainMenu_(main_menu)
+
+
+def rebuild_status_menu():
+    """Refresh the menu's checkmarks after a settings window change."""
+    if status_item:
+        status_item.rebuildMenu()
+
+
 def build_submenu(target, title, entries, selected, action):
     parent = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
     sub = AppKit.NSMenu.alloc().init()
@@ -871,15 +1072,22 @@ class StatusItem(AppKit.NSObject):
         self.ticks += 1
         if self.ticks == 10 and status_item_onscreen() is False:
             log("WARNING: menu bar icon is hidden behind the notch — the menu bar is full")
-            run_alert(
+            # A hidden status item leaves no way in, so fall back to a Dock
+            # icon: that gives a clickable target and a real app menu. An
+            # accessory app has neither by default.
+            show_dock_icon()
+            choice = run_alert(
                 "Sotto's icon is hidden behind the notch",
                 "Your menu bar is full, so macOS placed Sotto's icon in the notch "
                 f"area where it can't be seen. Sotto still works — hold "
-                f"{hotkey_label()} to dictate.\n\nTo see the icon, free up space: "
-                "hold ⌘ and drag unused menu bar icons off the bar, or quit other "
-                "menu bar apps, then relaunch Sotto.",
-                ["OK"],
+                f"{hotkey_label()} to dictate.\n\nSotto now also appears in the "
+                "Dock, so you can reach Settings and History from there. To "
+                "recover the menu bar icon instead, hold ⌘ and drag unused icons "
+                "off the bar, then relaunch Sotto.",
+                ["Open Settings", "OK"],
             )
+            if choice == 0:
+                settings_win.show()
 
     def rebuildMenu(self):
         menu = AppKit.NSMenu.alloc().init()
@@ -916,6 +1124,7 @@ class StatusItem(AppKit.NSObject):
             )
         )
         actions = (
+            ("Settings…", "showSettings:", ","),
             ("History…", "showHistory:", "h"),
             ("Open Log", "openLog:", ""),
             ("Report a Bug…", "reportBug:", ""),
@@ -932,6 +1141,8 @@ class StatusItem(AppKit.NSObject):
         save_settings()
         log(f"hotkey: {hotkey_label()}")
         self.rebuildMenu()
+        if settings_win and getattr(settings_win, "window", None):
+            settings_win.syncControls()
 
     def setRewrite_(self, sender):
         settings["rewrite"] = sender.representedObject()
@@ -939,9 +1150,14 @@ class StatusItem(AppKit.NSObject):
         if settings["rewrite"] != "off":
             ensure_rewriter()
         self.rebuildMenu()
+        if settings_win and getattr(settings_win, "window", None):
+            settings_win.syncControls()
 
     def copyTranscript_(self, sender):
         set_clipboard(sender.representedObject())
+
+    def showSettings_(self, _sender):
+        settings_win.show()
 
     def showHistory_(self, _sender):
         history_win.show()
@@ -1017,7 +1233,7 @@ def install_status_item():
 
 
 def main():
-    global overlay, history_win
+    global overlay, history_win, settings_win, status_item
     os.makedirs(SUPPORT_DIR, exist_ok=True)
     # Migrate transcript files created by older versions to private mode;
     # _private_opener only covers newly created files
@@ -1034,10 +1250,12 @@ def main():
     app.setDelegate_(delegate)
     load_settings()
     load_history()
-    refs = install_status_item()  # noqa: F841 — keep AppKit objects alive
+    refs = install_status_item()  # tuple keeps the AppKit objects alive
+    status_item = refs[0]
     overlay = Overlay.alloc().init()
     overlay.build()
     history_win = HistoryWindow.alloc().init()
+    settings_win = SettingsWindow.alloc().init()
     threading.Thread(target=audio_control, daemon=True).start()
     install_hotkey_monitors()
     prompt_missing_permissions()
