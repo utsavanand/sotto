@@ -1,4 +1,13 @@
 # Changelog
+## 1.6.0 — 2026-09-23
+
+- "Bullet points" is now "Structured": instead of forcing every dictation
+  into bullets, it picks the shape the content calls for — prose for a single
+  thought, bullets for parallel items, numbered steps for a sequence, and a
+  lead-in line above a list when you framed one. Your wording is kept; it
+  tidies grammar and stutters rather than rewriting in its own voice.
+- Existing settings migrate automatically (bullets -> structured).
+
 ## 1.5.1 — 2026-09-23
 
 - Fixed the overlay freezing on "Pasted" and then swallowing the next

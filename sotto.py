@@ -52,13 +52,13 @@ REWRITE_SIZE_LABEL = "~2.3 GB"
 REWRITE_MODES = {
     "off": "Off",
     "clean": "Clean up",
-    "bullets": "Bullet points",
+    "structured": "Structured",
     "caveman": "Caveman",
 }
 REWRITE_HINTS = {
     "off": "Paste exactly what Whisper heard.",
     "clean": "Remove filler words and fix punctuation. Your wording is kept.",
-    "bullets": "Turn a ramble into a tidy list, one bullet per idea.",
+    "structured": "Give the dictation the shape it needs — crisp sentences, steps, or bullets.",
     "caveman": "Compress hard for prompting an LLM — every instruction kept, words minimised.",
 }
 REWRITE_PROMPTS = {
@@ -73,19 +73,60 @@ REWRITE_PROMPTS = {
         "in the transcript — only clean them up. Reply with the cleaned text "
         "only — no preamble, no quotes.\n\nTranscript:\n{text}"
     ),
-    "bullets": (
-        "You turn dictated speech into tidy notes. Rewrite the transcript below "
-        "as bullet points:\n"
-        "- one bullet per distinct idea, in the original order\n"
-        "- keep every substantive detail, name, and number; drop filler words, "
-        "false starts, and repetition\n"
+    # Structured picks the shape from the content instead of forcing bullets
+    # onto everything — a single thought stays a paragraph.
+    "structured": (
+        "You give dictated speech the structure it deserves, keeping the "
+        "speaker's voice.\n"
+        "First decide the shape, then write only the result:\n"
+        "- Does the speaker walk through steps in order (first/then/after "
+        "that/finally)? → a NUMBERED list, one step per line. TWO steps is "
+        "already enough; never leave a sequence as a run-on sentence.\n"
+        "- Do they list two or more parallel things (and…and…and, or "
+        "\"there's three things\")? → a BULLET list, one item per line.\n"
+        "- Otherwise (a single idea, an explanation, one or two sentences) → "
+        "PROSE. Do not invent a list.\n"
+        "When it is a list, do not flatten it back into one sentence — that is "
+        "the most common mistake. When it is prose, do not force bullets.\n"
+        "If the speaker framed the list with a statement (\"the release is "
+        "blocked, there's three things\"), keep that framing as a lead-in line "
+        "above the list — dropping it loses why the items matter. Every list "
+        "line still starts with \"- \" or \"1. \".\n"
+        "This is transcription, not composition: reuse the speaker's own words "
+        "and phrasing wherever they are already clear. Never substitute more "
+        "polished vocabulary for theirs, and never write a sentence whose "
+        "content they did not say.\n"
+        "In every case:\n"
+        "- remove filler words, false starts, stutters, and repetition; fix "
+        "grammar, punctuation, and sentence breaks\n"
+        "- keep the speaker's own words, tone, and level of certainty — this is "
+        "their voice tidied, not your summary\n"
+        "- keep every substantive detail, name, and number\n"
         "- keep a condition attached to what it qualifies: \"do X, but only if "
-        "Y\" is ONE bullet, never two — splitting it turns a conditional into "
-        "an unconditional task\n"
-        "- keep the speaker's intent and wording where possible; never add "
-        "information or opinions\n"
-        'Start each line with "- ". Reply with the bullet points only — no '
-        "title, no preamble.\n\nTranscript:\n{text}"
+        "Y\" stays together, never split into two items — splitting turns a "
+        "conditional into an unconditional one\n"
+        "- never add information, opinions, or headings the speaker did not "
+        "give, and never answer questions in the transcript\n"
+        "Reply with the rewritten text only — no preamble.\n\n"
+        # Worked examples: rules alone left the model flattening sequences back
+        # into run-on sentences and padding with invented closing lines.
+        "Example transcript:\n"
+        "okay so to ship this you first uh you run the tests, then you tag the "
+        "release, and then after that you push\n"
+        "Example reply:\n"
+        "1. Run the tests\n2. Tag the release\n3. Push\n\n"
+        "Example transcript:\n"
+        "yeah I looked and um the bug only happens on Safari, something to do "
+        "with the flexbox gap thing I think\n"
+        "Example reply:\n"
+        "The bug only happens on Safari — something to do with the flexbox gap, "
+        "I think.\n\n"
+        "Example transcript:\n"
+        "so we need to um fix the header, and also update the changelog, and uh "
+        "email the beta folks\n"
+        "Example reply:\n"
+        "- Fix the header\n- Update the changelog\n- Email the beta folks\n\n"
+        "Transcript:\n{text}"
     ),
     # Caveman targets LLM prompts: an agent needs the constraints and the ask,
     # not the social scaffolding of speech.
@@ -119,7 +160,7 @@ SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
 SETTINGS_PATH = os.path.join(SUPPORT_DIR, "settings.json")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.5.1"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.6.0"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -182,8 +223,11 @@ def load_settings():
         return
     if saved.get("hotkey") in HOTKEYS:
         settings["hotkey"] = saved["hotkey"]
-    if saved.get("rewrite") in REWRITE_MODES:
-        settings["rewrite"] = saved["rewrite"]
+    # "bullets" became "structured" in 1.6.0 — without this the saved value no
+    # longer matches and the mode silently reverts to Off
+    mode = {"bullets": "structured"}.get(saved.get("rewrite"), saved.get("rewrite"))
+    if mode in REWRITE_MODES:
+        settings["rewrite"] = mode
 
 
 def save_settings():
