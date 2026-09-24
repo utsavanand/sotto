@@ -22,10 +22,10 @@
     <text x="445" y="99" font-size="15" fill="#24292f">because QA is still working through the payment bugs.</text>
   </g>
 
-  <!-- bullet points -->
+  <!-- structured -->
   <g>
     <rect x="425" y="132" width="465" height="103" rx="14" fill="#f6f8fa" stroke="#d0d7de"/>
-    <text x="445" y="162" font-size="13" fill="#7aa2f7" font-weight="600">Bullet points</text>
+    <text x="445" y="162" font-size="13" fill="#7aa2f7" font-weight="600">Structured</text>
     <text x="445" y="192" font-size="15" fill="#24292f">•  Move the launch to next Thursday</text>
     <text x="445" y="216" font-size="15" fill="#24292f">•  QA is still working through the payment bugs</text>
   </g>

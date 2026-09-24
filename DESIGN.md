@@ -28,10 +28,11 @@ listener); startup warmup inference added; clipboard save/restore dropped;
   settings.json)*
 - No streaming/live transcription (transcribe once on key release)
 - No Wispr-style tone rewriting, dictionary, or per-app formatting
-  *(partially superseded: v1.4 added optional rewrite — filler removal or
-  bullet points via a pinned Qwen3-4B-Instruct through mlx-lm, lazy-loaded,
-  falling back to the raw transcript on any failure. Dictionary and per-app
-  formatting remain out.)*
+  *(partially superseded: v1.4 added optional rewrite, with three modes by
+  v1.6 — filler removal, structured output, and LLM-ready compression — via a
+  pinned Qwen3-4B-Instruct through mlx-lm, lazy-loaded, falling back to the
+  raw transcript on any failure. Dictionary and per-app formatting remain
+  out.)*
 - No clipboard preservation: dictation overwrites the clipboard. The
   save/restore alternative has a timing race (restore too early and slow apps
   paste the *old* clipboard), pollutes clipboard-manager history with two

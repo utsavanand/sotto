@@ -35,14 +35,17 @@ telemetry.
 Recent transcripts (click to copy), your hotkey, rewrite mode, history,
 log, and one-click bug reports:
 
-<img src="assets/menu.svg" width="640" alt="Sotto menu: transcripts, Hotkey and Rewrite submenus, History, Open Log, Report a Bug">
+<img src="assets/menu.svg" width="640" alt="Sotto menu: transcripts, Hotkey and Rewrite submenus, Settings, History, Open Log, Report a Bug">
 
-- **Settings…** — a real window (⌘,) for hotkey and rewrite mode, so they
-  stay reachable even when a full menu bar hides the icon behind the notch
+- **Settings…** — a real window (⌘,) for hotkey and rewrite mode
 - **Hotkey** — right Option (default), right Command, right Control, or right
   Shift. Right-side only: the left keys are needed for typing.
 - **Report a Bug…** — opens a pre-filled Mail draft with diagnostics and the
   log attached; nothing sends until you review it.
+
+If your menu bar is full, macOS hides the icon behind the notch. Sotto
+detects that and adds a Dock icon with the same menu, so Settings and
+History stay reachable — no alert, no lost settings.
 
 ## Rewrite (optional)
 
