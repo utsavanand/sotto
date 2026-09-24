@@ -1,4 +1,11 @@
 # Changelog
+## 1.7.1 — 2026-09-24
+
+- assets/menu.svg shows Edit Dictionary…, and CI now fails when the
+  illustration falls behind sotto.py. The README's images had drifted
+  behind renamed modes and new menu items three times, and nothing in CI
+  looked at them.
+
 ## 1.7.0 — 2026-09-24
 
 - Custom dictionary: list proper nouns and jargon in

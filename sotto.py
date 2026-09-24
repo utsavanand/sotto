@@ -184,7 +184,7 @@ DICTIONARY_TEMPLATE = """\
 # Kubernetes
 """
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.7.0"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.7.1"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 

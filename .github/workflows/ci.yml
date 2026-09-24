@@ -17,6 +17,9 @@ jobs:
       - run: ruff check sotto.py
       - run: python -m py_compile sotto.py
       - run: bash -n install.sh run.sh
+      # Illustrations drifted behind renamed modes and new menu items three
+      # times before this check existed
+      - run: python tools/check_docs_sync.py
 
   # arm64 macOS runner: resolves the hashed lock exactly as install.sh will,
   # so a malformed or incomplete lock cannot merge undetected
