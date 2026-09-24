@@ -1,4 +1,18 @@
 # Changelog
+## 1.5.1 — 2026-09-23
+
+- Fixed the overlay freezing on "Pasted" and then swallowing the next
+  recording's animation. Cause was the notch warning: NSAlert.runModal()
+  spins a nested run loop that starves every NSTimer in the process, so an
+  alert sitting unnoticed behind other windows froze the pill mid-cycle.
+  That warning is now silent — the Dock icon appears and the Settings
+  window explains it, instead of a modal that fired on every launch.
+- The Dock icon is Sotto's, not the Python rocket: a process running out of
+  Homebrew's Python.app never consults our bundle's .icns, so it is now set
+  explicitly at runtime.
+- Retained the "Pasted" hide timer, which an unreferenced NSTimer could
+  otherwise have been collected before firing.
+
 ## 1.5.0 — 2026-09-23
 
 - Settings window (⌘,) for hotkey and rewrite mode. The menu bar item still

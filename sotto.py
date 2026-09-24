@@ -119,7 +119,7 @@ SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
 SETTINGS_PATH = os.path.join(SUPPORT_DIR, "settings.json")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.5.0"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.5.1"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -716,8 +716,16 @@ class Overlay(AppKit.NSObject):
         effect.addSubview_(view)
         self.panel, self.view, self.timer = panel, view, None
         self.watchdog = None
+        self.done_timer = None
 
     def show(self):
+        # A new recording always wins: cancel anything still pending from the
+        # last one, or a late hide/watchdog would tear down this recording's
+        # display mid-dictation
+        self.cancelWatchdog()
+        if self.done_timer:
+            self.done_timer.invalidate()
+            self.done_timer = None
         screen = AppKit.NSScreen.mainScreen().frame()
         w, h = OVERLAY_SIZE
         x = screen.origin.x + (screen.size.width - w) / 2
@@ -780,15 +788,24 @@ class Overlay(AppKit.NSObject):
         """Flash 'Pasted' briefly, then hide — a silent disappearance makes a
         failed dictation and a successful one look identical."""
         self.setPhase_("done")
-        AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        # Retained: an unreferenced NSTimer can be collected before it fires,
+        # which left the pill stuck on "Pasted" forever — and a stuck pill
+        # also swallowed the next recording's animation.
+        if self.done_timer:
+            self.done_timer.invalidate()
+        self.done_timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.45, self, "hideTimer:", None, False
         )
 
     def hideTimer_(self, _timer):
+        self.done_timer = None
         self.hide()
 
     def hide(self):
         self.cancelWatchdog()
+        if self.done_timer:
+            self.done_timer.invalidate()
+            self.done_timer = None
         if self.timer:
             self.timer.invalidate()
             self.timer = None
@@ -894,12 +911,10 @@ class SettingsWindow(AppKit.NSObject):
         self.status.cell().setWraps_(True)
         content.addSubview_(self.status)
 
-        content.addSubview_(
-            make_label(
-                "Everything runs on this Mac. Audio never leaves the device.",
-                24, 16, 11, dim=True,
-            )
-        )
+        self.notice = make_label("", 24, 16, 11, dim=True)
+        self.notice.setFrame_(((24, 8), (412, 30)))
+        self.notice.cell().setWraps_(True)
+        content.addSubview_(self.notice)
         self.window = window
 
     def syncControls(self):
@@ -912,6 +927,16 @@ class SettingsWindow(AppKit.NSObject):
         self.refreshHint()
 
     def refreshHint(self):
+        if status_item_onscreen() is False:
+            self.notice.setStringValue_(
+                "Your menu bar is full, so macOS hides Sotto's icon behind the "
+                "notch — reach Sotto from the Dock instead. Everything runs on "
+                "this Mac."
+            )
+        else:
+            self.notice.setStringValue_(
+                "Everything runs on this Mac. Audio never leaves the device."
+            )
         mode = settings["rewrite"]
         self.hint.setStringValue_(REWRITE_HINTS.get(mode, ""))
         if mode == "off":
@@ -1012,7 +1037,29 @@ def show_dock_icon():
     """Promote the accessory app to a regular one, giving it a Dock icon and
     an app menu — the only reachable UI when the status item is hidden."""
     AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
+    apply_app_icon()
     install_app_menu()
+
+
+def apply_app_icon():
+    """Set the Dock icon explicitly.
+
+    The process runs out of Homebrew's Python.app, so macOS shows the Python
+    rocket rather than Sotto's icon — the .icns in our bundle is never
+    consulted for a process whose executable lives elsewhere.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    # Installed: Resources/Sotto.icns beside this file. From the repo
+    # (run.sh): assets/Sotto.icns.
+    for icns in (
+        os.path.join(here, "Sotto.icns"),
+        os.path.join(here, "assets", "Sotto.icns"),
+    ):
+        image = AppKit.NSImage.alloc().initWithContentsOfFile_(icns)
+        if image:
+            AppKit.NSApp.setApplicationIconImage_(image)
+            return
+    log("could not load the Dock icon — falling back to the Python icon")
 
 
 def install_app_menu():
@@ -1071,23 +1118,16 @@ class StatusItem(AppKit.NSObject):
             self.rebuildMenu()
         self.ticks += 1
         if self.ticks == 10 and status_item_onscreen() is False:
-            log("WARNING: menu bar icon is hidden behind the notch — the menu bar is full")
+            log("menu bar icon is hidden behind the notch — showing a Dock icon instead")
             # A hidden status item leaves no way in, so fall back to a Dock
             # icon: that gives a clickable target and a real app menu. An
             # accessory app has neither by default.
+            #
+            # Deliberately NOT an alert. runModal() spins a nested run loop
+            # that starves every NSTimer in the process, so an unnoticed alert
+            # froze the recording overlay mid-dictation — and it fired on
+            # every launch, since a full menu bar is a permanent condition.
             show_dock_icon()
-            choice = run_alert(
-                "Sotto's icon is hidden behind the notch",
-                "Your menu bar is full, so macOS placed Sotto's icon in the notch "
-                f"area where it can't be seen. Sotto still works — hold "
-                f"{hotkey_label()} to dictate.\n\nSotto now also appears in the "
-                "Dock, so you can reach Settings and History from there. To "
-                "recover the menu bar icon instead, hold ⌘ and drag unused icons "
-                "off the bar, then relaunch Sotto.",
-                ["Open Settings", "OK"],
-            )
-            if choice == 0:
-                settings_win.show()
 
     def rebuildMenu(self):
         menu = AppKit.NSMenu.alloc().init()
