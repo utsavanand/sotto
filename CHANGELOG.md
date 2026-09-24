@@ -1,4 +1,11 @@
 # Changelog
+## 1.4.2 — 2026-09-23
+
+- The progress pill can no longer get stuck on screen. When CoreAudio
+  deadlocks (another audio app holding the HAL mutex), the audio thread
+  blocks inside PortAudio's stop and the transcribe step never runs, so
+  nothing took the overlay down. A 90 s watchdog now hides it regardless.
+
 ## 1.4.1 — 2026-09-23
 
 - The recording pill no longer vanishes on key release: it stays up through

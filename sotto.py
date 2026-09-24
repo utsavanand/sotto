@@ -79,12 +79,15 @@ TAP_MAX_SECONDS = 0.35  # a press shorter than this counts as a tap
 DOUBLE_TAP_SECONDS = 0.5  # two taps within this window lock hands-free mode
 HISTORY_SIZE = 10
 LONG_RECORDING_SECONDS = 60  # elapsed counter turns amber past this
+# Upper bound on transcribe+rewrite before the overlay gives up and hides.
+# Generous: a 5-minute dictation plus a rewrite stays well inside it.
+PIPELINE_TIMEOUT_SECONDS = 90
 LOG_PATH = os.path.expanduser("~/Library/Logs/Sotto.log")
 SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/Sotto")
 HISTORY_PATH = os.path.join(SUPPORT_DIR, "history.jsonl")
 SETTINGS_PATH = os.path.join(SUPPORT_DIR, "settings.json")
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.4.1"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.4.2"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -288,8 +291,11 @@ def stop_recording():
         return
     state = "ready"
     # The pill stays up: the worker switches it to "Transcribing…" and hides
-    # it when the paste lands. _finish_recording hides it for dropped audio.
+    # it when the paste lands. _finish_recording hides it for dropped audio,
+    # and the watchdog below covers the case where the audio thread is wedged
+    # in CoreAudio and _finish_recording never runs at all.
     overlay.setPhase_("transcribing")
+    overlay.armWatchdog()
     s, buf = stream, record_buf
     stream = None
     record_buf = None
@@ -675,6 +681,7 @@ class Overlay(AppKit.NSObject):
         view = LevelView.alloc().initWithFrame_(((0, 0), size))
         effect.addSubview_(view)
         self.panel, self.view, self.timer = panel, view, None
+        self.watchdog = None
 
     def show(self):
         screen = AppKit.NSScreen.mainScreen().frame()
@@ -710,6 +717,31 @@ class Overlay(AppKit.NSObject):
         if not self.timer:
             self.startTimer()
 
+    def armWatchdog(self):
+        """Hide the pill if the pipeline never reports back.
+
+        A CoreAudio deadlock blocks the audio thread inside PortAudio's
+        stop/close, so _finish_recording never runs and nothing else would
+        ever take the pill down. A stuck overlay floating over every app is
+        worse than losing the progress display.
+        """
+        self.cancelWatchdog()
+        self.watchdog = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            PIPELINE_TIMEOUT_SECONDS, self, "watchdogFired:", None, False
+        )
+
+    def cancelWatchdog(self):
+        wd = getattr(self, "watchdog", None)
+        if wd:
+            wd.invalidate()
+        self.watchdog = None
+
+    def watchdogFired_(self, _timer):
+        self.watchdog = None
+        if self.panel.isVisible():
+            log("overlay timed out waiting for the pipeline — hiding it")
+            self.hide()
+
     def finish(self):
         """Flash 'Pasted' briefly, then hide — a silent disappearance makes a
         failed dictation and a successful one look identical."""
@@ -722,6 +754,7 @@ class Overlay(AppKit.NSObject):
         self.hide()
 
     def hide(self):
+        self.cancelWatchdog()
         if self.timer:
             self.timer.invalidate()
             self.timer = None
