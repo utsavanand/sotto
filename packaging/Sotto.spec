@@ -73,8 +73,11 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # torch ships CUDA/ROCm kernels and test suites that never run on Apple
-    # Silicon; excluding them is most of the size win
+    # Excluding torch submodules looks like free size savings and is not:
+    # torch.utils.data.dataloader imports torch.distributed unconditionally,
+    # so excluding it broke the whole torch -> transformers -> AutoTokenizer
+    # chain, surfacing three layers later as a bogus "AutoTokenizer" error.
+    # Only exclude packages nothing in the import graph reaches.
     excludes=[
         "tkinter",
         "matplotlib",
@@ -82,9 +85,6 @@ a = Analysis(
         "pytest",
         "IPython",
         "notebook",
-        "torch.distributed",
-        "torch.testing",
-        "torch.utils.tensorboard",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
