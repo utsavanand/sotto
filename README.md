@@ -11,6 +11,8 @@
     <a href="https://github.com/utsavanand/sotto/releases/latest"><img src="https://img.shields.io/github/v/release/utsavanand/sotto" alt="Latest release"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/utsavanand/sotto" alt="License"></a>
   </p>
+
+  <p><a href="https://sotto.utsava.xyz"><strong>sotto.utsava.xyz</strong></a></p>
 </div>
 
 Hold a key anywhere on macOS, speak, release — your words are typed into
