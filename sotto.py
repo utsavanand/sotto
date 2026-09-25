@@ -157,8 +157,21 @@ REWRITE_PROMPTS = {
 }
 SAMPLE_RATE = 16_000
 MIN_SECONDS = 0.3
-TAP_MAX_SECONDS = 0.35  # a press shorter than this counts as a tap
-DOUBLE_TAP_SECONDS = 0.5  # two taps within this window lock hands-free mode
+# Whisper invents fluent text from near-silence — a 0.6s clip at peak 0.005
+# produced a paragraph of German. Real speech in practice peaks at 0.03+,
+# so this floor sits an order of magnitude below the quietest genuine
+# dictation while still catching a room recorded by accident.
+MIN_PEAK = 0.012
+TAP_MAX_SECONDS = 0.45  # a press shorter than this counts as a tap
+# Two taps within this window lock hands-free mode. 0.5s was tighter than a
+# natural double-tap: real attempts logged at 0.6-0.8s apart missed the pair,
+# so the gesture silently did nothing.
+DOUBLE_TAP_SECONDS = 0.9
+# Ignore a stop tap arriving right after locking. Without it, the release of
+# the second tap — or a third from an over-eager double-tap — cancelled the
+# lock instantly, recording a fraction of a second of silence that Whisper
+# then hallucinated a paragraph from.
+LOCK_GRACE_SECONDS = 0.6
 HISTORY_SIZE = 10
 LONG_RECORDING_SECONDS = 60  # elapsed counter turns amber past this
 # Upper bound on transcribe+rewrite before the overlay gives up and hides.
@@ -185,7 +198,7 @@ DICTIONARY_TEMPLATE = """\
 # Kubernetes
 """
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.7.3"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.7.4"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -207,6 +220,7 @@ status_item = None  # StatusItem delegate, so windows can refresh the menu
 locked = False
 press_time = 0.0
 last_tap = 0.0
+lock_time = 0.0  # when hands-free last engaged, for the grace period
 settings = {"hotkey": "right_option", "rewrite": "off"}
 mlx_lm = None  # imported lazily by _load_rewriter — pulls in transformers (~2s)
 rewriter = None  # (model, tokenizer) once loaded
@@ -467,18 +481,26 @@ def _finish_recording(s, buf):
         )
         AppHelper.callAfter(overlay.hide)
         return
+    if peak < MIN_PEAK:
+        log(f"dropped: {secs:.1f}s too quiet to be speech (peak {peak:.3f})")
+        AppHelper.callAfter(overlay.hide)
+        return
     log(f"recorded {secs:.1f}s on '{input_name}' (peak {peak:.3f}), transcribing...")
     jobs.put(audio)
 
 
 def handle_flags_changed(event):
-    global locked, press_time, last_tap
+    global locked, press_time, last_tap, lock_time
     keycode, device_mask, _ = HOTKEYS[settings["hotkey"]]
     if event.keyCode() != keycode:
         return
     now = time.monotonic()
     if event.modifierFlags() & device_mask:  # key down
         if locked:
+            # A tap arriving within the grace period is the tail of the
+            # double-tap that just locked, not a deliberate stop
+            if now - lock_time < LOCK_GRACE_SECONDS:
+                return
             locked = False
             stop_recording()
         else:
@@ -500,6 +522,7 @@ def handle_flags_changed(event):
             last_tap = now
             if recent:
                 locked = True
+                lock_time = now
                 last_tap = 0.0  # consumed; the next tap starts a fresh pair
                 log(f"hands-free recording — tap {hotkey_label()} to stop")
                 return

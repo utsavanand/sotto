@@ -1,4 +1,18 @@
 # Changelog
+## 1.7.4 — 2026-09-25
+
+- Hands-free double-tap actually works now. The state machine was right,
+  but the timing was not: DOUBLE_TAP_SECONDS of 0.5 was tighter than a
+  natural double-tap, and real attempts 0.6-0.8 s apart silently missed
+  the pair. Widened to 0.9 s, with the tap window at 0.45 s.
+- A tap within 0.6 s of locking no longer cancels it. The tail of an
+  eager double-tap was stopping the recording it had just started, which
+  is what made the feature look dead.
+- Clips too quiet to be speech are dropped instead of transcribed.
+  Whisper invented a paragraph of German from 0.6 s at peak 0.005; real
+  dictation peaks at 0.03+, so the new floor sits well below genuine
+  speech while catching a room recorded by accident.
+
 ## 1.7.3 — 2026-09-25
 
 - New app icon: a waveform tapering from white to blue, left to right — a
