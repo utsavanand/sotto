@@ -198,7 +198,7 @@ DICTIONARY_TEMPLATE = """\
 # Kubernetes
 """
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.7.4"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.7.5"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -489,6 +489,24 @@ def _finish_recording(s, buf):
     jobs.put(audio)
 
 
+def schedule_deferred_stop(tap_time):
+    """Stop recording unless a second tap arrives first.
+
+    A tap alone should end the dictation, but a tap that turns out to be the
+    first half of a double-tap must not tear the audio stream down — reopening
+    it ~60ms later returns a stream that records silence.
+    """
+    def fire(_timer):
+        # A newer tap or a lock superseded this one; leave the stream alone
+        if locked or last_tap != tap_time:
+            return
+        stop_recording()
+
+    AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+        DOUBLE_TAP_SECONDS, False, fire
+    )
+
+
 def handle_flags_changed(event):
     global locked, press_time, last_tap, lock_time
     keycode, device_mask, _ = HOTKEYS[settings["hotkey"]]
@@ -503,6 +521,10 @@ def handle_flags_changed(event):
                 return
             locked = False
             stop_recording()
+        elif state == "recording" and now - last_tap < DOUBLE_TAP_SECONDS:
+            # Second tap of a double-tap arriving before the pending stop ran.
+            # Leave the live stream alone; key-up decides lock vs stop.
+            press_time = now
         else:
             press_time = now
             start_recording()
@@ -511,6 +533,10 @@ def handle_flags_changed(event):
             return
         if now - press_time < TAP_MAX_SECONDS:
             # Double-tap: keep recording hands-free until the next tap.
+            # The stream is NOT stopped between the two taps. Tearing it down
+            # and reopening ~60ms later handed back a stream that captured
+            # silence — PortAudio had not finished releasing the device — so
+            # hands-free recorded a quiet room while the user spoke.
             # last_tap starts at 0.0, so `now - last_tap` was only small
             # enough to match on a genuine second tap — but monotonic()
             # counts from boot, meaning the very first tap after a launch
@@ -526,6 +552,11 @@ def handle_flags_changed(event):
                 last_tap = 0.0  # consumed; the next tap starts a fresh pair
                 log(f"hands-free recording — tap {hotkey_label()} to stop")
                 return
+            # First short tap: hold the stream open briefly in case a second
+            # tap is coming. Stopping immediately is what forced the reopen
+            # that captured silence.
+            schedule_deferred_stop(now)
+            return
         stop_recording()
 
 

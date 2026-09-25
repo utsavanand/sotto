@@ -1,4 +1,17 @@
 # Changelog
+## 1.7.5 — 2026-09-25
+
+- Hands-free actually records your voice now. The lock was working all
+  along; the audio was not. A double-tap fires start/stop/start within
+  ~60 ms, and those queue onto one serialized audio thread, so the second
+  open ran while PortAudio was still releasing the device and handed back
+  a stream that captured silence. Whisper then hallucinated fluent text
+  from the noise floor — the paragraphs of German and "little little
+  little" came from there.
+- The first tap's stop is now deferred: if a second tap follows inside the
+  double-tap window, the stop is cancelled and the stream is never torn
+  down, so recording continues straight into hands-free mode.
+
 ## 1.7.4 — 2026-09-25
 
 - Hands-free double-tap actually works now. The state machine was right,
