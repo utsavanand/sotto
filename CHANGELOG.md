@@ -1,4 +1,13 @@
 # Changelog
+## 1.7.2 — 2026-09-25
+
+- Hands-free mode works again. last_tap was only assigned in a branch the
+  double-tap path returned before reaching, so it stayed at its initial
+  0.0 — and since time.monotonic() counts from boot, a *single* tap
+  satisfied the "within 0.5 s of the last tap" test and locked recording.
+  The real second tap then read as the stop tap, so the gesture looked
+  dead. Every tap now records its timestamp, and a consumed pair resets.
+
 ## 1.7.1 — 2026-09-24
 
 - assets/menu.svg shows Edit Dictionary…, and CI now fails when the

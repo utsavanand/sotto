@@ -184,7 +184,7 @@ DICTIONARY_TEMPLATE = """\
 # Kubernetes
 """
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.7.1"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.7.2"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -487,12 +487,21 @@ def handle_flags_changed(event):
         if locked or state != "recording":
             return
         if now - press_time < TAP_MAX_SECONDS:
-            # Double-tap: keep recording hands-free until the next tap
-            if now - last_tap < DOUBLE_TAP_SECONDS:
+            # Double-tap: keep recording hands-free until the next tap.
+            # last_tap starts at 0.0, so `now - last_tap` was only small
+            # enough to match on a genuine second tap — but monotonic()
+            # counts from boot, meaning the very first tap after a launch
+            # near boot matched too, and thereafter the stale 0.0 never
+            # updated because it was assigned in the else branch only.
+            # Recording it on every tap makes the window mean what it says.
+            first_tap = last_tap == 0.0
+            recent = not first_tap and now - last_tap < DOUBLE_TAP_SECONDS
+            last_tap = now
+            if recent:
                 locked = True
+                last_tap = 0.0  # consumed; the next tap starts a fresh pair
                 log(f"hands-free recording — tap {hotkey_label()} to stop")
                 return
-            last_tap = now
         stop_recording()
 
 
