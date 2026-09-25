@@ -23,10 +23,18 @@ a stock Mac with no Gatekeeper warning and no terminal.
 
 ### One-time setup
 
-1. **Certificate** — developer.apple.com → Certificates → **+** → *Developer ID
-   Application*. Download and double-click the `.cer` to install it.
-   Verify: `security find-identity -v -p codesigning` should list
-   "Developer ID Application: <your name>".
+1. **Certificate.** A CSR and private key are already generated at
+   `~/Desktop/sotto-signing/`. Go to developer.apple.com → Certificates → **+**
+   → *Developer ID Application*, upload
+   `DeveloperID.certSigningRequest` when asked, download the `.cer`, then:
+
+   ```sh
+   ./packaging/setup-signing.sh ~/Downloads/developerID_application.cer
+   ```
+
+   That imports the certificate alongside the private key that made the CSR —
+   the pairing that silently fails if you download a certificate onto a machine
+   that never made the request.
 
 2. **App-specific password** — appleid.apple.com → Sign-In and Security →
    App-Specific Passwords. Apple rejects your normal password here.
