@@ -78,8 +78,23 @@ ln -s /Applications "$STAGE/Applications"   # drag-to-install target
 hdiutil create -volname "Sotto" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 
-echo "==> notarizing (this usually takes a few minutes)"
-xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+echo "==> notarizing (usually minutes; large uploads can take an hour)"
+# Submit and wait separately. `submit --wait` died mid-wait when the script
+# ran detached, leaving an unstapled DMG that looked like a success. Capturing
+# the id first means the wait can be retried without re-uploading 350+ MB.
+SUBMIT_ID="$(xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" \
+    | awk '/^  id:/ {print $2; exit}')"
+[[ -n "$SUBMIT_ID" ]] || { echo "no submission id returned"; exit 1; }
+echo "submission id: $SUBMIT_ID"
+xcrun notarytool wait "$SUBMIT_ID" --keychain-profile "$NOTARY_PROFILE"
+
+STATUS="$(xcrun notarytool info "$SUBMIT_ID" --keychain-profile "$NOTARY_PROFILE" \
+    | awk '/^  status:/ {print $2; exit}')"
+if [[ "$STATUS" != "Accepted" ]]; then
+    echo "notarization $STATUS — details:"
+    xcrun notarytool log "$SUBMIT_ID" --keychain-profile "$NOTARY_PROFILE"
+    exit 1
+fi
 
 echo "==> stapling"
 xcrun stapler staple "$DMG"
