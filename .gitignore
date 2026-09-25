@@ -4,3 +4,4 @@ __pycache__/
 .DS_Store
 temp/
 uv-out/
+build-release/
