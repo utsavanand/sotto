@@ -1,4 +1,10 @@
 # Changelog
+## 1.7.3 — 2026-09-25
+
+- New app icon: a waveform tapering from white to blue, left to right — a
+  voice dropping to a whisper. Replaces the blushing speech-bubble face,
+  which read as a toy rather than a tool.
+
 ## 1.7.2 — 2026-09-25
 
 - Hands-free mode works again. last_tap was only assigned in a branch the
