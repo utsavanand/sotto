@@ -10,25 +10,66 @@
 
 import os
 
+from PyInstaller.utils.hooks import collect_all
+
 block_cipher = None
+
+# Naming lazy imports one at a time is a losing game — mlx alone failed on
+# mlx._reprlib_fix, and each fix costs a 10-minute rebuild to discover the
+# next one. collect_all sweeps up every submodule, data file, and dylib for
+# the packages that load code dynamically.
+_collected_datas, _collected_binaries, _collected_hidden = [], [], []
+# transformers resolves AutoTokenizer through a lazy-module shim, so its
+# submodules are invisible to static analysis too.
+for _pkg in ("mlx", "mlx_whisper", "mlx_lm", "sounddevice", "transformers", "tokenizers"):
+    _d, _b, _h = collect_all(_pkg)
+    _collected_datas += _d
+    _collected_binaries += _b
+    _collected_hidden += _h
 
 a = Analysis(
     ["../sotto.py"],
     pathex=[],
-    binaries=[],
-    datas=[("../assets/Sotto.icns", ".")],
+    binaries=_collected_binaries,
+    datas=[("../assets/Sotto.icns", ".")] + _collected_datas,
     # mlx_whisper and mlx_lm resolve model code lazily, so PyInstaller's static
-    # analysis misses these
+    # analysis misses these. mlx's C extension imports mlx._reprlib_fix and
+    # friends at init time — there is no upstream PyInstaller hook for mlx, so
+    # its submodules have to be named explicitly or the app dies on first
+    # import with "No module named 'mlx._reprlib_fix'".
     hiddenimports=[
+        "mlx",
+        "mlx.core",
+        "mlx.nn",
+        "mlx.utils",
+        "mlx.extension",
+        "mlx._reprlib_fix",
+        "mlx.__array_api_info",
         "mlx_whisper",
+        "mlx_whisper.audio",
+        "mlx_whisper.decoding",
+        "mlx_whisper.load_models",
+        "mlx_whisper.transcribe",
         "mlx_lm",
         "mlx_lm.models",
         "mlx_lm.tokenizer_utils",
+        "mlx_lm.utils",
         "transformers",
+        # transformers swaps itself for a _LazyModule that resolves names via
+        # importlib at attribute-access time, so collect_all alone still left
+        # AutoTokenizer unresolvable at runtime. Name the concrete modules.
+        "transformers.models.auto",
+        "transformers.models.auto.tokenization_auto",
+        "transformers.models.auto.configuration_auto",
+        "transformers.models.qwen2",
+        "transformers.models.qwen2.tokenization_qwen2",
+        "transformers.tokenization_utils",
+        "transformers.tokenization_utils_base",
+        "transformers.tokenization_utils_fast",
         "tokenizers",
         "sounddevice",
         "huggingface_hub",
-    ],
+    ] + _collected_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

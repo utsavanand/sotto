@@ -3,6 +3,7 @@ locally transcribed text is pasted into the focused app. See DESIGN.md."""
 
 import collections
 import json
+import multiprocessing
 import os
 import platform
 import queue
@@ -1472,4 +1473,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # A frozen bundle re-executes its own binary to create worker processes.
+    # Without this the child re-runs main() instead, so the app launched twice
+    # — two menu bar items, two model loads. Harmless when not frozen.
+    multiprocessing.freeze_support()
     main()
