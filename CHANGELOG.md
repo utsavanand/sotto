@@ -1,4 +1,13 @@
 # Changelog
+## 1.7.7 — 2026-09-26
+
+- Raised the silence floor from 0.012 to 0.025. A clip at peak 0.013 slipped
+  through and Whisper emitted "videos" four hundred times. Every genuine
+  dictation observed peaks at 0.05+; every hallucination under 0.02.
+- Added a repetition-loop guard. Even above the floor Whisper sometimes
+  loops one word, and pasting that into an editor is worse than pasting
+  nothing, so a transcript whose unique-word ratio collapses is dropped.
+
 ## 1.7.6 — 2026-09-26
 
 - The Dock fallback now actually appears when the menu bar icon is hidden.

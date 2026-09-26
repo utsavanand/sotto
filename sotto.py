@@ -157,11 +157,10 @@ REWRITE_PROMPTS = {
 }
 SAMPLE_RATE = 16_000
 MIN_SECONDS = 0.3
-# Whisper invents fluent text from near-silence — a 0.6s clip at peak 0.005
-# produced a paragraph of German. Real speech in practice peaks at 0.03+,
-# so this floor sits an order of magnitude below the quietest genuine
-# dictation while still catching a room recorded by accident.
-MIN_PEAK = 0.012
+# Whisper invents fluent text from near-silence — 0.6s at peak 0.005 produced
+# a paragraph of German, and 0.013 produced "videos" 400 times. Every real
+# dictation in practice peaks at 0.05+, every hallucination under 0.02.
+MIN_PEAK = 0.025
 TAP_MAX_SECONDS = 0.45  # a press shorter than this counts as a tap
 # Two taps within this window lock hands-free mode. 0.5s was tighter than a
 # natural double-tap: real attempts logged at 0.6-0.8s apart missed the pair,
@@ -198,7 +197,7 @@ DICTIONARY_TEMPLATE = """\
 # Kubernetes
 """
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.7.6"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.7.7"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -580,6 +579,21 @@ def install_hotkey_monitors():
 model_path = None  # local snapshot dir of the pinned revision, set by backend
 
 
+def looks_hallucinated(text):
+    """True when Whisper has fallen into a repetition loop.
+
+    Even above the silence floor it sometimes emits one word hundreds of
+    times ("videos videos videos..."). Pasting that into the user's editor
+    is worse than pasting nothing, so the worker drops it.
+    """
+    words = text.split()
+    if len(words) < 20:
+        return False
+    # A genuine sentence reuses words; 400 repeats of one token does not.
+    unique_ratio = len({w.lower().strip(".,!?") for w in words}) / len(words)
+    return unique_ratio < 0.12
+
+
 def transcribe(audio, use_dictionary=True):
     terms = read_dictionary() if use_dictionary else []
     return mlx_whisper.transcribe(
@@ -674,6 +688,10 @@ def worker():
         # silently while the UI still shows ready
         try:
             text = transcribe(audio)
+            if looks_hallucinated(text):
+                log(f"dropped: transcription looks like a repetition loop ({len(text.split())} words)")
+                AppHelper.callAfter(overlay.hide)
+                continue
             mode = settings["rewrite"]
             if text and mode != "off":
                 AppHelper.callAfter(overlay.setPhase_, "rewriting")
