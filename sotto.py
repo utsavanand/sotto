@@ -198,7 +198,7 @@ DICTIONARY_TEMPLATE = """\
 # Kubernetes
 """
 TITLES = {"loading": "…", "ready": "🎙", "recording": "🔴", "error": "⚠️"}
-APP_VERSION = "1.7.5"  # keep in sync with CFBundleShortVersionString in install.sh
+APP_VERSION = "1.7.6"  # keep in sync with CFBundleShortVersionString in install.sh
 BUG_REPORT_EMAIL = "getutsava@gmail.com"
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -764,12 +764,22 @@ def prompt_missing_permissions():
 
 
 def status_item_onscreen():
+    """True only if every status-bar window we own is actually on screen.
+
+    A hidden status item reports more than one layer-25 window: one phantom
+    that claims to be onscreen and the real one that does not. Returning on
+    the first match therefore reported "visible" for an icon buried in the
+    notch, and the Dock fallback never ran — leaving no way into the app.
+    """
     pid = os.getpid()
     wins = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionAll, Quartz.kCGNullWindowID)
-    for w in wins:
-        if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowLayer") == 25:
-            return bool(w.get("kCGWindowIsOnscreen", False))
-    return None
+    found = [
+        w for w in (wins or [])
+        if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowLayer") == 25
+    ]
+    if not found:
+        return None
+    return all(w.get("kCGWindowIsOnscreen", False) for w in found)
 
 
 OVERLAY_SIZE = (196, 36)
@@ -1331,7 +1341,12 @@ class StatusItem(AppKit.NSObject):
             self.menu_version = history_version
             self.rebuildMenu()
         self.ticks += 1
-        if self.ticks == 10 and status_item_onscreen() is False:
+        # `is not True` rather than `is False`: status_item_onscreen() returns
+        # None when CGWindowListCopyWindowInfo tells us nothing, which happens
+        # without Screen Recording permission. Treating unknown as "visible"
+        # left users with a hidden status item AND no Dock icon — no way into
+        # the app at all. An unnecessary Dock icon is the harmless failure.
+        if self.ticks == 10 and status_item_onscreen() is not True:
             log("menu bar icon is hidden behind the notch — showing a Dock icon instead")
             # A hidden status item leaves no way in, so fall back to a Dock
             # icon: that gives a clickable target and a real app menu. An

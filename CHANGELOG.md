@@ -1,4 +1,14 @@
 # Changelog
+## 1.7.6 — 2026-09-26
+
+- The Dock fallback now actually appears when the menu bar icon is hidden.
+  A buried status item reports two layer-25 windows — a phantom claiming to
+  be onscreen and the real hidden one — and the check returned on the first
+  match, so it concluded "visible" and skipped the fallback. On a notched
+  Mac with a full menu bar that left no way into the app at all: no visible
+  icon, no Dock icon, no menu. It now requires every status window to be
+  onscreen, and treats an inconclusive answer as hidden.
+
 ## 1.7.5 — 2026-09-25
 
 - Hands-free actually records your voice now. The lock was working all
